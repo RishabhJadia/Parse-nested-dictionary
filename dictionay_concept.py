@@ -76,3 +76,63 @@ print(result)
         {'port': 1414, 'ips': [{'ip': 1, 'first': 1, 'last': 1}, {'ip': 2, 'first': 2, 'last': 2}]}
     ]
 }
+
+----------------------------------------------------------------------------------------------------------
+1st way
+aa= {'egress': defaultdict(list), 'ingress': defaultdict(list)}
+for k,v in data['spec'].items():
+	if k == 'egress':
+		for rec in v:
+			if rec['ports'][0]['port'] in outbound_ports:
+				aa_ = list(map(lambda x: x['ipBlock']['cidr'], rec['to']))
+				aa['egress'][rec['ports'][0]['port']].extend(aa_)
+	elif k == 'ingress':
+		for rec in v:
+			if rec['ports'][0]['port'] in inbound_ports:
+				aa_ = list(map(lambda x: x['ipBlock']['cidr'], rec['from']))
+				aa['ingress'][rec['ports'][0]['port']].extend(aa_)
+
+
+
+2nd way
+aa = {'egress': defaultdict(list), 'ingress': defaultdict(list)}
+
+for rec in data['spec'].get('egress', []):
+    port = rec['ports'][0]['port']
+    if port in outbound_ports:
+        aa_ = [x['ipBlock']['cidr'] for x in rec['to']]
+        aa['egress'][port].extend(aa_)
+
+for rec in data['spec'].get('ingress', []):
+    port = rec['ports'][0]['port']
+    if port in inbound_ports:
+        aa_ = [x['ipBlock']['cidr'] for x in rec['from']]
+        aa['ingress'][port].extend(aa_)
+
+
+3rd way
+from collections import defaultdict
+
+def process_section(data, ports, field):
+    aa = defaultdict(list)
+    
+    for rec in data:
+        port = rec['ports'][0]['port']
+        if port in ports:
+            aa_ = [x['ipBlock']['cidr'] for x in rec[field]]
+            aa[port].extend(aa_)
+    
+    return aa
+
+def process_data(data, outbound_ports, inbound_ports):
+    aa = defaultdict(dict)
+    sections = {
+        'egress': ('to', outbound_ports),
+        'ingress': ('from', inbound_ports)
+    }
+    
+    for section, (field, ports) in sections.items():
+        data_section = data.get(section, [])
+        aa[section] = process_section(data_section, ports, field)
+    
+    return aa
