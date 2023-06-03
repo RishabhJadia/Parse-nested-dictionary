@@ -144,3 +144,27 @@ class TestACM(unittest.TestCase):
         # Assert that the response has the expected format and values.
         expected_response = [{'haserror': True}, {'haserror': True}]
         self.assertEqual(result, expected_response)
+---------------------------------------------------------------------------------------
+import unittest
+from unittest.mock import Mock
+
+class ACMTest(unittest.TestCase):
+
+    def setUp(self):
+        self.config = Mock()
+        self.config.service_url.return_value = "http://localhost:8080"
+
+        self.acm = ACM()
+
+    def test_submit_acm(self):
+        prepare_acm_response = [(1, 2), (3, 4)]
+        sid = 5
+
+        expected_response = [{'haserror': False}, {'haserror': False}]
+
+        self.acm._prepare_data.return_value = {'rec': 1, 'rec1': 2}
+        self.acm.send_data.return_value = {'haserror': False}
+
+        actual_response = self.acm.submit_acm(prepare_acm_response, sid)
+
+        self.assertEqual(actual_response, expected_response)
