@@ -168,3 +168,43 @@ class ACMTest(unittest.TestCase):
         actual_response = self.acm.submit_acm(prepare_acm_response, sid)
 
         self.assertEqual(actual_response, expected_response)
+----------------------------------------------------------------------------------------
+class TestSendData(unittest.TestCase):
+
+    def test_send_data_success(self):
+        url = 'https://example.com/api/v1/data'
+        headers = {'Authorization': 'Bearer TOKEN'}
+        json_object = {'key1': 'value1', 'key2': 'value2'}
+
+        # Create a mock for the `requests.post` function.
+        requests_post = Mock()
+        requests_post.return_value = {'haserror': False}
+
+        # Patch the `requests.post` function with the mock.
+        with unittest.mock.patch('requests.post', requests_post):
+
+            # Create a new instance of the `SendData` class.
+            send_data = SendData(url, headers)
+
+            # Call the `send_data` function and assert that the response is successful.
+            resp = send_data.send_data(json_object)
+            self.assertEqual(resp['haserror'], False)
+
+    def test_send_data_failure(self):
+        url = 'https://example.com/api/v1/data'
+        headers = {'Authorization': 'Bearer TOKEN'}
+        json_object = {'key1': 'value1', 'key2': 'value2'}
+
+        # Create a mock for the `requests.post` function.
+        requests_post = Mock()
+        requests_post.side_effect = Exception('Error sending data')
+
+        # Patch the `requests.post` function with the mock.
+        with unittest.mock.patch('requests.post', requests_post):
+
+            # Create a new instance of the `SendData` class.
+            send_data = SendData(url, headers)
+
+            # Call the `send_data` function and assert that the response is unsuccessful.
+            resp = send_data.send_data(json_object)
+            self.assertEqual(resp['haserror'], True)
