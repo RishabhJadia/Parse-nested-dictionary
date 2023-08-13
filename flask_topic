@@ -1,0 +1,53 @@
+Agenda:
+- What and Why Flask?
+- Setup & Workflow
+- Get basic app running
+- Templates & Static Content
+- Setting up and using Database
+- Create basic CRUD application
+
+What is flask?
+- Flask is a lightweight micro-framework
+- Web application framework written in Python 
+- Open source library
+- Easy to code
+- Easy to configure
+
+Why flask
+- Simplicity: Flask is simple and easy to use with minimalistic and straightforward syntax.
+- Flexibility: Flask does not enforce any specific project structure.
+- Extensibility: Flask has a vast ecosystem of extensions. (Developers can choose and integrate only the extensions they need, keeping the project lightweight and efficient.)
+- Community and Documentation: Flask has an active and large community of developers (which make it easier for developers to learn and get help when needed.)
+
+Setup virtual environment and Flask Installation
+	Install Python
+		Python comes with a package manager called pip
+	Install virtualenv
+		pip install virtualenv
+	Create a directory for your web application
+		mkdir hello
+	Create virtualenv inside your webapplication diretory
+		python -m vevn venv
+	Activate virtualenv
+		.venv\Script\activate
+	
+	link: 
+
+	Install Flask
+		pip install flask
+	Cross check all packages are Installed
+		pip list
+
+Applicaiton Demo
+	- Image
+
+Lets Code
+	image
+
+
+
+
+
+how to create webapplication
+how to create URL or Routing
+how to create API
