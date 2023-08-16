@@ -1,0 +1,18 @@
+#print
+aa = "Rishabh is good"
+"The Rishabh is good and bad"
+
+answer:
+incorrect way
+bb = "The"
+cc = "and bad"
+print(f"{bb} Rishabh is good {cc}")
+correct way
+print(f"the {aa} and bad")
+
+aa = "Rishabh age is 20"
+"Mine age 50 and Rishabh age is 20 and total age is 70"
+incorrect way
+print(f"Mine age 50 and {aa} and total age is 70")
+correct way
+print(f"Mine age {50} and {aa} and total age is {50+20}")
