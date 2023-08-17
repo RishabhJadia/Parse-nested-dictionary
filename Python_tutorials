@@ -1,7 +1,7 @@
 #print
+question
 aa = "Rishabh is good"
 "The Rishabh is good and bad"
-
 answer:
 incorrect way
 bb = "The"
@@ -10,9 +10,35 @@ print(f"{bb} Rishabh is good {cc}")
 correct way
 print(f"the {aa} and bad")
 
+question
 aa = "Rishabh age is 20"
 "Mine age 50 and Rishabh age is 20 and total age is 70"
+answer:
 incorrect way
 print(f"Mine age 50 and {aa} and total age is 70")
 correct way
 print(f"Mine age {50} and {aa} and total age is {50+20}")
+
+#List
+question:
+aa = [3,2,"lol",6]
+[3,5,4,6,"rish"]
+
+answer
+aa.append("rish")
+[3, 2, "lol", 6, "rish"]
+bb=aa.index("lol")
+aa.pop(bb)
+[3, 2, 6, "rish"]
+aa.insert(1, 5)
+aa.insert(2, 4)
+
+question:
+aa = ["rishabh", 1, 3, "lele"]
+bb = ["pagal", "kon", "h"]
+cc = [3,2,1,6,2,0]
+["rishabh", 1, 3, "lele", ["pagal", "kon", "h"], [0,1,2,2,3,6]]
+answer
+cc.sort()
+aa.append(bb)
+aa.append(cc)
