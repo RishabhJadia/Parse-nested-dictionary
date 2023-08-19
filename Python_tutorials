@@ -42,3 +42,21 @@ answer
 cc.sort()
 aa.append(bb)
 aa.append(cc)
+
+question
+aa = ["lele", "3", 2, 1]
+bb = [11, 13, 12]
+cc = [32,1,42,50]
+answer:
+import copy
+
+dd = copy.copy(bb)
+cc.sort()
+print(cc)  #[1,32,42,50]
+bb.append(cc) #[11, 13, 12, [1,32,42,50]]
+bb.append(aa) #[11, 13, 12, [1,32,42,50], ["lele", "3", 2, 1]]
+
+print(f"The result is {aa}, {dd} and {cc}. Final list is {bb}")
+
+"The result is ["lele", "3", 2, 1], [11, 13, 12] and [1,32,42,50]. Final list is [11, 13, 12, [1,32,42,50], ["lele", "3", 2, 1]]"
+
