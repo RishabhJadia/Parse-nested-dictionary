@@ -47,16 +47,41 @@ question
 aa = ["lele", "3", 2, 1]
 bb = [11, 13, 12]
 cc = [32,1,42,50]
+
 answer:
 import copy
-
 dd = copy.copy(bb)
 cc.sort()
 print(cc)  #[1,32,42,50]
 bb.append(cc) #[11, 13, 12, [1,32,42,50]]
 bb.append(aa) #[11, 13, 12, [1,32,42,50], ["lele", "3", 2, 1]]
-
 print(f"The result is {aa}, {dd} and {cc}. Final list is {bb}")
 
 "The result is ["lele", "3", 2, 1], [11, 13, 12] and [1,32,42,50]. Final list is [11, 13, 12, [1,32,42,50], ["lele", "3", 2, 1]]"
+
+question
+aa = ["lele", "3", 2, 1]
+cc = [32,1,42,50]
+Final answer is: [32,1,42,50], [32,1,42,50, ["lele", "3", 2, 1]]. Oops [0, "lele", 13, "3", 2, 1, 5], [1, 32, 42, 50], ["lele", "3", 2, 1, 1, 32, 42, 50]
+answer:
+
+import copy
+aa = ["lele", "3", 2, 1]
+cc = [32,1,42,50]
+dd = copy.copy(cc)
+xx= copy.copy(aa)
+cc.append(xx)
+bb = copy.copy(aa)
+bb.insert(0,0)
+bb.insert(2,13)
+bb.append(5)
+ee=copy.copy(dd)
+ee.sort()
+aa.extend(ee)
+print(f"Final answer is: {dd},{cc}. Oops {bb}{ee},{aa} " )
+
+#Final answer is: [32,1,42,50], [32,1,42,50, ["lele", "3", 2, 1]].
+#Oops [0, "lele", 13, "3", 2, 1, 5], [1, 32, 42, 50], ["lele", "3", 2, 1, 1, 32, 42, 50]
+
+
 
