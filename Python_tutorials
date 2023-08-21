@@ -83,5 +83,6 @@ print(f"Final answer is: {dd},{cc}. Oops {bb}{ee},{aa} " )
 #Final answer is: [32,1,42,50], [32,1,42,50, ["lele", "3", 2, 1]].
 #Oops [0, "lele", 13, "3", 2, 1, 5], [1, 32, 42, 50], ["lele", "3", 2, 1, 1, 32, 42, 50]
 
-
+#---------------------------------------------------------------------------------------------------
+#Tuple -> Immutable (aap kabhi add ya delete ya remove ya insert ni kr skte h) --> heterogenous --> faster --> represent=> (3,)
 
