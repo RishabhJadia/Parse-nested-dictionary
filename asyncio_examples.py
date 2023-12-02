@@ -18,6 +18,7 @@ async def my_async_code():
 
 # Run the asynchronous code
 asyncio.run(my_async_code())
-requests.get is a synchronous operation and could potentially block if used directly in an asynchronous context, the use of run_in_executor helps mitigate this issue by executing it asynchronously in a separate thread pool.
+requests.get is a synchronous operation and could potentially block if used directly in an asynchronous context, 
+the use of run_in_executor helps mitigate this issue by executing it asynchronously in a separate thread pool.
 ----------------------------------------------------------------------------------------------------------------------------------
   
