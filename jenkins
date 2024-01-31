@@ -1,0 +1,74 @@
+def customClosure() {
+  { steps, domain, config ->
+    steps.stage("aa") {
+      def appname = "aaa"
+
+      script {
+        // Loop through services
+        ["dev-egress", "dev-1-egress", "dev-2-egress", "dev-3-egress",
+         "prod-gress", "prod-1-egress", "prod-2-egress", "prod-3-egress",
+         "uat-egress", "uat-1-egress", "uat-2-egress"].each { serviceName ->
+          try {
+            // Check if service exists
+            sh "cf service ${serviceName}"
+
+            // If existing, unbind, delete, and create again (for potential updates)
+            steps.sh """
+              echo "Service ${serviceName} exists, handling..."
+              cf unbind-service ${appname} ${serviceName}
+              cf delete-service ${serviceName} || echo "Service ${serviceName} already deleted"
+              cf create-service mq-service ${serviceName}
+              cf bind-service ${appname} ${serviceName}
+            """
+          } catch (Exception e) {
+            // Service not found, create and bind it
+            steps.sh """
+              echo "Service ${serviceName} not found, creating and binding..."
+              cf create-service mq-service ${serviceName}
+              cf bind-service ${appname} ${serviceName}
+            """
+          }
+        }
+      }
+    }
+  }
+}
+
+
+def customClosure() {
+  { steps, domain, config ->
+    steps.stage("aa") {
+      def appname = "aaa"
+
+      script {
+        // Get all files in the directory
+        def serviceDir = new File("directory/path")
+        def serviceNames = serviceDir.listFiles().collect { it.name }
+
+        // Iterate through the service names
+        serviceNames.each { serviceName ->
+          try {
+            // Check if service exists
+            sh "cf service ${serviceName}"
+
+            // If existing, unbind, delete, and create again (for potential updates)
+            steps.sh """
+              echo "Service ${serviceName} exists, handling..."
+              cf unbind-service ${appname} ${serviceName}
+              cf delete-service ${serviceName} || echo "Service ${serviceName} already deleted"
+              cf create-service mq-service ${serviceName}
+              cf bind-service ${appname} ${serviceName}
+            """
+          } catch (Exception e) {
+            // Service not found, create and bind it
+            steps.sh """
+              echo "Service ${serviceName} not found, creating and binding..."
+              cf create-service mq-service ${serviceName}
+              cf bind-service ${appname} ${serviceName}
+            """
+          }
+        }
+      }
+    }
+  }
+}
