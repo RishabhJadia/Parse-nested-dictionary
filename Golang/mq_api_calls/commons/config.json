@@ -1,0 +1,20 @@
+{
+    "MqMonth": {
+        "headers": {
+            "client_id": "88153",
+            "resource_id": "123456-ri",
+            "public_key": "pki/mqadmin_public.pem",
+            "private_key": "pki/mqadmin_private.pem"
+        },
+        "base_url": "https://www.mqmonth.com/v1"
+    },
+    "InvAdmin": {
+        "headers": {
+            "client_id": "98765",
+            "resource_id": "32145-ri",
+            "public_key": "pki/invadmin_public.pem",
+            "private_key": "pki/invadmin_private.pem"
+        },
+        "base_url": "https://www.invm.com/v1"
+    }
+}
