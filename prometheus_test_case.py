@@ -121,3 +121,54 @@ if __name__ == '__main__':
     unittest.main()
 :
     unittest.main()
+-----------------------------------------------------------------
+import unittest
+from unittest.mock import patch, MagicMock
+from utilities.utils import initialize_collector
+from service.metrics_collector import CustomCollector
+from prometheus_client.core import CollectorRegistry
+
+class TestUtils(unittest.TestCase):
+    @patch('utilities.utils.CustomCollector')
+    @patch('utilities.utils.CollectorRegistry')
+    def test_initialize_collector_default_seal_ids(self, mock_collector_registry, mock_custom_collector):
+        # Setup the mocks
+        mock_registry = MagicMock(spec=CollectorRegistry)
+        mock_collector_registry.return_value = mock_registry
+        
+        mock_collector_instance = MagicMock(spec=CustomCollector)
+        mock_custom_collector.return_value = mock_collector_instance
+        
+        # Call the function without seal_ids
+        registry = initialize_collector()
+        
+        # Assertions
+        mock_collector_registry.assert_called_once()
+        mock_custom_collector.assert_called_once_with(["seal_id_1", "seal_id_2", "seal_id_3"])
+        mock_registry.register.assert_called_once_with(mock_collector_instance)
+        self.assertEqual(registry, mock_registry)
+
+    @patch('utilities.utils.CustomCollector')
+    @patch('utilities.utils.CollectorRegistry')
+    def test_initialize_collector_with_custom_seal_ids(self, mock_collector_registry, mock_custom_collector):
+        # Setup the mocks
+        mock_registry = MagicMock(spec=CollectorRegistry)
+        mock_collector_registry.return_value = mock_registry
+        
+        mock_collector_instance = MagicMock(spec=CustomCollector)
+        mock_custom_collector.return_value = mock_collector_instance
+        
+        # Define custom seal IDs
+        custom_seal_ids = ["custom_seal_id_1", "custom_seal_id_2"]
+        
+        # Call the function with custom seal_ids
+        registry = initialize_collector(custom_seal_ids)
+        
+        # Assertions
+        mock_collector_registry.assert_called_once()
+        mock_custom_collector.assert_called_once_with(custom_seal_ids)
+        mock_registry.register.assert_called_once_with(mock_collector_instance)
+        self.assertEqual(registry, mock_registry)
+
+if __name__ == '__main__':
+    unittest.main()
