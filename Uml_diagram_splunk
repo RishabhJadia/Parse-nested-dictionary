@@ -53,3 +53,33 @@ if __name__ == '__main__':
 
     # Start Flask app
     app.run(host='0.0.0.0', port=5000)
+_-----;;;;-;---------------
+
+from flask import Flask, jsonify
+from flask_prometheus_exporter import PrometheusExporter
+from apscheduler.schedulers.background import BackgroundScheduler
+import datetime
+
+app = Flask(__name__)
+exporter = PrometheusExporter(app)
+
+last_run_time = exporter.gauge('scheduler_last_run_time', 'Timestamp of the last scheduler run', labels={'environment': 'production', 'region': 'us-west'})
+
+def update_metrics():
+    current_time = datetime.datetime.now()
+    last_run_time.labels(environment='production', region='us-west').set(current_time.timestamp())
+
+scheduler = BackgroundScheduler()
+scheduler.add_job(update_metrics, 'interval', minutes=10)
+scheduler.start()
+
+@app.route('/healthcheck')
+def healthcheck():
+    return jsonify({'status': 'ok'})
+
+@app.route('/metrics')
+def metrics():
+    return exporter.response()
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
