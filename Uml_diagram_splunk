@@ -1,30 +1,55 @@
-Actor Scheduler
-Participant SplunkInstances
-Participant EmailSystem
-Participant MFTSystem
+from flask import Flask, Response
+from flask_prometheus_metrics import register_metrics
+from apscheduler.schedulers.background import BackgroundScheduler
+from prometheus_client import Gauge, generate_latest, CollectorRegistry, CONTENT_TYPE_LATEST
+from datetime import datetime
+import time
 
-Note over Scheduler: Start the scheduler
+# Initialize Flask app
+app = Flask(__name__)
 
-Scheduler -> SplunkInstances: Try to connect
-SplunkInstances --> Scheduler: Connection failed
+# Register default metrics and /metrics endpoint
+register_metrics(app, app_version="v1.0.0", app_config="production")
 
-alt All instances down
-    Scheduler -> EmailSystem: Send email to mwaa team DL (All instances down)
-end
+# Custom Prometheus metrics
+registry = CollectorRegistry()
+my_metric = Gauge('my_metric_name', 'Description of my metric', registry=registry)
+last_run_time = Gauge('scheduler_last_run_time', 'Timestamp of the last scheduler run', registry=registry)
 
-alt Connection successful
-    Scheduler -> ConnectedInstance: Get resource ID
-    ConnectedInstance --> Scheduler: Return resource ID
+def update_metrics():
+    """Function to update Prometheus metrics."""
+    # Example metric update
+    my_metric.set(123)  # Replace with actual logic
 
-    alt No resource ID found
-        Scheduler -> EmailSystem: Send email to mwaa team DL (No resource IDs found)
-    else Resource ID found
-        Scheduler -> Scheduler: Prepare privilege roles data with PAM week rating
-        Scheduler -> MFTSystem: Send prepared data to MFT system
-        MFTSystem --> Scheduler: Acknowledge data receipt
+    # Update last run time with the current time in UNIX timestamp format
+    current_time = datetime.now().timestamp()
+    last_run_time.set(current_time)
 
-        alt Exception during data transfer
-            Scheduler -> EmailSystem: Send email to mwaa team DL (Exception during data transfer)
-        end
-    end
-end
+@app.route('/healthcheck')
+def healthcheck():
+    return "OK", 200
+
+@app.route('/metrics')
+def metrics():
+    """Endpoint to expose metrics."""
+    return Response(generate_latest(registry), mimetype=CONTENT_TYPE_LATEST)
+
+def start_scheduler():
+    """Function to start the scheduler."""
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(update_metrics, 'interval', minutes=10)
+    scheduler.start()
+
+    # Keep the script running
+    while True:
+        time.sleep(1)
+
+if __name__ == '__main__':
+    # Start the scheduler in a separate thread
+    from threading import Thread
+    scheduler_thread = Thread(target=start_scheduler)
+    scheduler_thread.daemon = True
+    scheduler_thread.start()
+
+    # Start Flask app
+    app.run(host='0.0.0.0', port=5000)
