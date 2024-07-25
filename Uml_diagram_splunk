@@ -1,0 +1,30 @@
+Actor Scheduler
+Participant SplunkInstances
+Participant EmailSystem
+Participant MFTSystem
+
+Note over Scheduler: Start the scheduler
+
+Scheduler -> SplunkInstances: Try to connect
+SplunkInstances --> Scheduler: Connection failed
+
+alt All instances down
+    Scheduler -> EmailSystem: Send email to mwaa team DL (All instances down)
+end
+
+alt Connection successful
+    Scheduler -> ConnectedInstance: Get resource ID
+    ConnectedInstance --> Scheduler: Return resource ID
+
+    alt No resource ID found
+        Scheduler -> EmailSystem: Send email to mwaa team DL (No resource IDs found)
+    else Resource ID found
+        Scheduler -> Scheduler: Prepare privilege roles data with PAM week rating
+        Scheduler -> MFTSystem: Send prepared data to MFT system
+        MFTSystem --> Scheduler: Acknowledge data receipt
+
+        alt Exception during data transfer
+            Scheduler -> EmailSystem: Send email to mwaa team DL (Exception during data transfer)
+        end
+    end
+end
