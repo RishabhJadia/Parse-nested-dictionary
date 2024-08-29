@@ -1,0 +1,147 @@
+#without intermediate table
+@startuml
+
+class DeploymentId {
+    +name: CharField <<PK>>
+}
+
+class Seal {
+    +name: CharField <<PK>>
+    +lob: CharField
+    +investment_strategy: CharField
+}
+
+class Instance {
+    +name: CharField <<PK>>
+    +description: CharField
+    +product_version: CharField
+    +environment: CharField <<FK>> (choices=ENV_CHOICES)
+}
+
+class Jobmask {
+    +name: CharField <<PK>>
+    +seal: ForeignKey(Seal, null=True, on_delete=CASCADE)
+}
+
+class Host {
+    +name: CharField <<PK>>
+    +seal: ForeignKey(Seal, null=True, on_delete=CASCADE)
+    +environment: CharField <<FK>> (choices=Instance.ENV_CHOICES)
+}
+
+class VirtualMachine {
+    +name: CharField <<PK>>
+}
+
+class JobConfig {
+    +name: CharField <<PK>>
+    +instance: ForeignKey(Instance, on_delete=CASCADE) <<FK>>
+    +host: ForeignKey(Host, on_delete=CASCADE) <<FK>>
+    +virtual_machine: ForeignKey(VirtualMachine, on_delete=CASCADE) <<FK>>
+    +job_mask: ForeignKey(Jobmask, null=True, on_delete=CASCADE) <<FK>>
+}
+
+class Database {
+    +name: CharField <<PK>>
+    +host: ForeignKey(Host, on_delete=CASCADE) <<FK>>
+    +environment: CharField <<FK>> (choices=Instance.ENV_CHOICES)
+    +instance: ForeignKey(Instance, on_delete=CASCADE) <<FK>>
+}
+
+class Agent {
+    +name: CharField
+    +host: ForeignKey(Host, on_delete=CASCADE) <<FK>>
+}
+
+DeploymentId ||--o{ Seal : deployment_ids
+Seal ||--o{ Jobmask : seal
+Seal ||--o{ Host : seal
+Instance }o--o{ Jobmask : instance
+Instance }o--o{ Host : instance
+Host }o--o{ VirtualMachine : hosts
+Instance ||--o{ JobConfig : instance
+Host ||--o{ JobConfig : host
+VirtualMachine ||--o{ JobConfig : virtual_machine
+Jobmask ||--o{ JobConfig : job_mask
+Host ||--o{ Database : host
+Instance ||--o{ Database : instance
+Host ||--o{ Agent : host
+
+@enduml
+------------------------------------------------------------
+#with intermediate table
+@startuml
+
+class DeploymentId {
+    +name: CharField <<PK>>
+}
+
+class Seal {
+    +name: CharField <<PK>>
+    +lob: CharField
+    +investment_strategy: CharField
+}
+
+class Instance {
+    +name: CharField <<PK>>
+    +description: CharField
+    +product_version: CharField
+    +environment: CharField <<FK>> (choices=ENV_CHOICES)
+}
+
+class Jobmask {
+    +name: CharField <<PK>>
+    +seal: ForeignKey(Seal, null=True, on_delete=CASCADE)
+}
+
+class Host {
+    +name: CharField <<PK>>
+    +seal: ForeignKey(Seal, null=True, on_delete=CASCADE)
+    +environment: CharField <<FK>> (choices=Instance.ENV_CHOICES)
+}
+
+class VirtualMachine {
+    +name: CharField <<PK>>
+}
+
+class VirtualMachineHost {
+    +virtual_machine: ForeignKey(VirtualMachine, on_delete=CASCADE) <<FK>>
+    +host: ForeignKey(Host, on_delete=CASCADE) <<FK>>
+}
+
+class JobConfig {
+    +name: CharField <<PK>>
+    +instance: ForeignKey(Instance, on_delete=CASCADE) <<FK>>
+    +host: ForeignKey(Host, on_delete=CASCADE) <<FK>>
+    +virtual_machine: ForeignKey(VirtualMachine, on_delete=CASCADE) <<FK>>
+    +job_mask: ForeignKey(Jobmask, null=True, on_delete=CASCADE) <<FK>>
+}
+
+class Database {
+    +name: CharField <<PK>>
+    +host: ForeignKey(Host, on_delete=CASCADE) <<FK>>
+    +environment: CharField <<FK>> (choices=Instance.ENV_CHOICES)
+    +instance: ForeignKey(Instance, on_delete=CASCADE) <<FK>>
+}
+
+class Agent {
+    +name: CharField
+    +host: ForeignKey(Host, on_delete=CASCADE) <<FK>>
+}
+
+DeploymentId ||--o{ Seal : deployment_ids
+Seal ||--o{ Jobmask : seal
+Seal ||--o{ Host : seal
+Instance }o--o{ Jobmask : instance
+Instance }o--o{ Host : instance
+Host }o--o{ VirtualMachineHost : hosts
+VirtualMachine }o--o{ VirtualMachineHost : virtual_machine
+Instance ||--o{ JobConfig : instance
+Host ||--o{ JobConfig : host
+VirtualMachine ||--o{ JobConfig : virtual_machine
+Jobmask ||--o{ JobConfig : job_mask
+Host ||--o{ Database : host
+Instance ||--o{ Database : instance
+Host ||--o{ Agent : host
+
+@enduml
