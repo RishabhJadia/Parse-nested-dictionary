@@ -50,4 +50,82 @@ def process_row(row):
         jobmask = Jobmask.objects.create(name=jobmask_name, seal=seal)
         jobmask.instance.add(*instances)
         jobmask.save()
-        print(f"Created jobmask '{jobmask_name}'.")
+        print(f"Created jobmask '{jobmask_name}'.") 
+
+-------------------------------
+       
+from collections import defaultdict
+
+def process_rows(rows):
+    jobmask_names = {row['Name'] for row in rows}
+    instance_names = {name for row in rows for name in row['instance'].split(',')}
+    seal_names = {row['seal'] for row in rows if row['seal']}
+
+    # Fetch all relevant jobmasks, instances, and seals at once
+    jobmasks = Jobmask.objects.filter(name__in=jobmask_names).prefetch_related('instance').in_bulk(field_name='name')
+    instances = Instance.objects.filter(name__in=instance_names).in_bulk(field_name='name')
+    seals = Seal.objects.filter(name__in=seal_names).in_bulk(field_name='name')
+
+    new_instances = []
+    new_seals = []
+    jobmask_updates = []
+    instance_jobmask_mapping = defaultdict(list)
+
+    for row in rows:
+        jobmask_name = row['Name']
+        instance_names = row['instance'].split(',')
+        seal_name = row['seal']
+
+        jobmask = jobmasks.get(jobmask_name)
+
+        if jobmask:
+            if seal_name:
+                seal = seals.get(seal_name) or Seal(name=seal_name)
+                if seal_name not in seals:
+                    new_seals.append(seal)
+                jobmask.seal = seal
+
+            current_instance_names = set(jobmask.instance.values_list('name', flat=True))
+            new_instance_names = set(instance_names)
+
+            # Add missing instances
+            for name in new_instance_names - current_instance_names:
+                instance = instances.get(name) or Instance(name=name)
+                if name not in instances:
+                    new_instances.append(instance)
+                instance_jobmask_mapping[jobmask_name].append(instance)
+
+            # Remove instances no longer present in the CSV
+            instances_to_remove = current_instance_names - new_instance_names
+            if instances_to_remove:
+                jobmask.instance.remove(*instances.filter(name__in=instances_to_remove))
+
+            jobmask_updates.append(jobmask)
+        else:
+            # Create a new jobmask
+            seal = seals.get(seal_name) or (Seal(name=seal_name) if seal_name else None)
+            if seal and seal_name not in seals:
+                new_seals.append(seal)
+
+            new_jobmask = Jobmask(name=jobmask_name, seal=seal)
+            jobmasks[jobmask_name] = new_jobmask
+            jobmask_updates.append(new_jobmask)
+
+            for name in instance_names:
+                instance = instances.get(name) or Instance(name=name)
+                if name not in instances:
+                    new_instances.append(instance)
+                instance_jobmask_mapping[jobmask_name].append(instance)
+
+    # Bulk create new instances and seals
+    if new_instances:
+        Instance.objects.bulk_create(new_instances)
+        instances.update({instance.name: instance for instance in new_instances})
+    if new_seals:
+        Seal.objects.bulk_create(new_seals)
+        seals.update({seal.name: seal for seal in new_seals})
+
+    # Bulk update jobmasks and add instances in bulk
+    Jobmask.objects.bulk_update(jobmask_updates, fields=['seal'])
+    for jobmask_name, inst_list in instance_jobmask_mapping.items():
+        jobmasks[jobmask_name].instance.add(*inst_list)
