@@ -1,48 +1,53 @@
-from django.db import transaction
-from your_app.models import Host, Seal, Instance
-import pandas as pd
+def process_row(row):
+    jobmask_name = row['Name']
+    instance_names = row['instance'].split(',')
+    seal_name = row['seal']
 
-# Example list of dictionaries
-host_data = [
-    {'host': 'host1', 'environment': 'prod', 'seal': 'seal1'},
-    {'host': 'host1', 'environment': 'prod', 'seal': 'seal2'},
-    {'host': 'host1', 'environment': 'test', 'seal': 'seal1'},
-    # Add more dictionaries as needed
-]
+    # Bulk fetch existing jobmask, instances, and seal
+    jobmask = Jobmask.objects.filter(name=jobmask_name).prefetch_related('instance').first()
+    instances = Instance.objects.filter(name__in=instance_names)
+    seal = Seal.objects.filter(name=seal_name).first() if seal_name else None
 
-# Start a transaction to ensure atomicity
-with transaction.atomic():
-    for entry in host_data:
-        host_name = entry['host']
-        environment = entry['environment']
-        seal_name = entry['seal']
-        
-        # Fetch or create Seal
-        seal, _ = Seal.objects.get_or_create(name=seal_name)
-        
-        # Check if host exists with null seal and environment
-        host = Host.objects.filter(name=host_name, seal__isnull=True, environment__isnull=True).first()
-        
-        if host:
-            # Update the existing host with the new seal and environment
-            host.seal = seal
-            host.environment = environment
-            host.save()
-            print(f"Updated existing host {host_name} with environment {environment} and seal {seal_name}.")
-        
+    if jobmask:
+        # Update the seal field only if necessary
+        if seal_name:
+            if jobmask.seal != seal:
+                if not seal:
+                    seal = Seal.objects.create(name=seal_name)
+                jobmask.seal = seal
         else:
-            # Check if host exists with non-null seal and environment
-            existing_host = Host.objects.filter(name=host_name, seal__isnull=False, environment__isnull=False).first()
-            
-            if existing_host:
-                # Create a new host as a copy of the existing one, but with the new seal and environment
-                new_host = Host.objects.create(
-                    name=existing_host.name,
-                    seal=seal,
-                    environment=environment,
-                )
-                # Copy the Many-to-Many relationships for instances from the existing host
-                new_host.instance.set(existing_host.instance.all())
-                print(f"Created new host {host_name} with environment {environment} and seal {seal_name}.")
-            else:
-                print(f"No matching host found for {host_name}.")
+            if jobmask.seal is not None:
+                jobmask.seal = None
+
+        # Add new instances that are not already associated with the jobmask
+        current_instances = jobmask.instance.all()
+        current_instance_names = set(current_instances.values_list('name', flat=True))
+        new_instance_names = set(instance_names)
+
+        # Add missing instances
+        instances_to_add = instances.exclude(name__in=current_instance_names)
+        if instances_to_add:
+            jobmask.instance.add(*instances_to_add)
+            print(f"Added instances {', '.join(instances_to_add.values_list('name', flat=True))} to jobmask '{jobmask_name}'.")
+
+        # Remove instances that are no longer in the CSV
+        instances_to_remove = current_instances.exclude(name__in=new_instance_names)
+        if instances_to_remove:
+            jobmask.instance.remove(*instances_to_remove)
+            print(f"Removed instances {', '.join(instances_to_remove.values_list('name', flat=True))} from jobmask '{jobmask_name}'.")
+
+        jobmask.save(update_fields=['seal'])
+        print(f"Updated jobmask '{jobmask_name}'.")
+    else:
+        # Create a new jobmask and related objects if needed
+        if not instances.exists():
+            instances = [Instance.objects.create(name=name) for name in instance_names]
+            print(f"Created instances {', '.join(instance_names)}.")
+
+        if not seal and seal_name:
+            seal = Seal.objects.create(name=seal_name)
+
+        jobmask = Jobmask.objects.create(name=jobmask_name, seal=seal)
+        jobmask.instance.add(*instances)
+        jobmask.save()
+        print(f"Created jobmask '{jobmask_name}'.")
