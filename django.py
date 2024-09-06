@@ -1,131 +1,78 @@
-def process_row(row):
-    jobmask_name = row['Name']
-    instance_names = row['instance'].split(',')
-    seal_name = row['seal']
-
-    # Bulk fetch existing jobmask, instances, and seal
-    jobmask = Jobmask.objects.filter(name=jobmask_name).prefetch_related('instance').first()
-    instances = Instance.objects.filter(name__in=instance_names)
-    seal = Seal.objects.filter(name=seal_name).first() if seal_name else None
-
-    if jobmask:
-        # Update the seal field only if necessary
-        if seal_name:
-            if jobmask.seal != seal:
-                if not seal:
-                    seal = Seal.objects.create(name=seal_name)
-                jobmask.seal = seal
-        else:
-            if jobmask.seal is not None:
-                jobmask.seal = None
-
-        # Add new instances that are not already associated with the jobmask
-        current_instances = jobmask.instance.all()
-        current_instance_names = set(current_instances.values_list('name', flat=True))
-        new_instance_names = set(instance_names)
-
-        # Add missing instances
-        instances_to_add = instances.exclude(name__in=current_instance_names)
-        if instances_to_add:
-            jobmask.instance.add(*instances_to_add)
-            print(f"Added instances {', '.join(instances_to_add.values_list('name', flat=True))} to jobmask '{jobmask_name}'.")
-
-        # Remove instances that are no longer in the CSV
-        instances_to_remove = current_instances.exclude(name__in=new_instance_names)
-        if instances_to_remove:
-            jobmask.instance.remove(*instances_to_remove)
-            print(f"Removed instances {', '.join(instances_to_remove.values_list('name', flat=True))} from jobmask '{jobmask_name}'.")
-
-        jobmask.save(update_fields=['seal'])
-        print(f"Updated jobmask '{jobmask_name}'.")
-    else:
-        # Create a new jobmask and related objects if needed
-        if not instances.exists():
-            instances = [Instance.objects.create(name=name) for name in instance_names]
-            print(f"Created instances {', '.join(instance_names)}.")
-
-        if not seal and seal_name:
-            seal = Seal.objects.create(name=seal_name)
-
-        jobmask = Jobmask.objects.create(name=jobmask_name, seal=seal)
-        jobmask.instance.add(*instances)
-        jobmask.save()
-        print(f"Created jobmask '{jobmask_name}'.") 
-
--------------------------------
-       
+#example data in csv 
+server_name
+iaas001.svr.com
+iaas002.svr.com
+iaas001.svr.com
+iaas23.svr.com
+userfriendly.com
+iaas001.svr.com
+# api response after chunk data
+{
+    "iaas001.svr.com": ["ip1", "ip2"],
+    "iaas002.svr.com": ["ip3"],
+    "iaas23.svr.com": [],
+    "userfriendly.com": ["ip4", "ip5", "ip6"]
+}
+#expected output
+server_name         api_result
+0  iaas001.svr.com              ip1
+1  iaas001.svr.com              ip2
+2  iaas002.svr.com              ip3
+3  iaas23.svr.com
+4  userfriendly.com              ip4
+5  userfriendly.com              ip5
+6  userfriendly.com              ip6
+---------------------------------------------------
+import pandas as pd
+import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
 
-def process_rows(rows):
-    jobmask_names = {row['Name'] for row in rows}
-    instance_names = {name for row in rows for name in row['instance'].split(',')}
-    seal_names = {row['seal'] for row in rows if row['seal']}
+def call_api(server_name):
+    # Replace with your actual API call logic
+    api_url = f"https://your_api_endpoint/{server_name}"
+    response = requests.get(api_url)
+    if response.status_code == 200:
+        return response.json()
+    else:
+        print(f"Error calling API for {server_name}: {response.status_code}")
+        return []
 
-    # Fetch all relevant jobmasks, instances, and seals at once
-    jobmasks = Jobmask.objects.filter(name__in=jobmask_names).prefetch_related('instance').in_bulk(field_name='name')
-    instances = Instance.objects.filter(name__in=instance_names).in_bulk(field_name='name')
-    seals = Seal.objects.filter(name__in=seal_names).in_bulk(field_name='name')
+def process_data(df_chunk, seen_servers):
+    # Extract unique server names
+    unique_server_names = df_chunk['server_name'].unique().tolist()
 
-    new_instances = []
-    new_seals = []
-    jobmask_updates = []
-    instance_jobmask_mapping = defaultdict(list)
+    # Filter out servers already seen
+    server_names = [server_name for server_name in unique_server_names if server_name not in seen_servers]
 
-    for row in rows:
-        jobmask_name = row['Name']
-        instance_names = row['instance'].split(',')
-        seal_name = row['seal']
+    # Make API calls concurrently
+    with ThreadPoolExecutor() as executor:
+        futures = [executor.submit(call_api, server_name) for server_name in server_names]
+        results = {server_name: future.result() for server_name, future in zip(server_names, futures)}
 
-        jobmask = jobmasks.get(jobmask_name)
+    # Update seen servers
+    seen_servers.update(server_names)
 
-        if jobmask:
-            if seal_name:
-                seal = seals.get(seal_name) or Seal(name=seal_name)
-                if seal_name not in seals:
-                    new_seals.append(seal)
-                jobmask.seal = seal
+    # Convert results to DataFrame
+    result_df = pd.DataFrame.from_dict(results, orient='index').reset_index()
+    result_df.columns = ['server_name', 'api_result']
 
-            current_instance_names = set(jobmask.instance.values_list('name', flat=True))
-            new_instance_names = set(instance_names)
+    # Handle empty lists
+    result_df['api_result'] = result_df['api_result'].apply(lambda x: x if isinstance(x, list) else [])
 
-            # Add missing instances
-            for name in new_instance_names - current_instance_names:
-                instance = instances.get(name) or Instance(name=name)
-                if name not in instances:
-                    new_instances.append(instance)
-                instance_jobmask_mapping[jobmask_name].append(instance)
+    return result_df
 
-            # Remove instances no longer present in the CSV
-            instances_to_remove = current_instance_names - new_instance_names
-            if instances_to_remove:
-                jobmask.instance.remove(*instances.filter(name__in=instances_to_remove))
+# Read CSV in chunks
+df = pd.read_csv('your_data.csv', chunksize=10000)
 
-            jobmask_updates.append(jobmask)
-        else:
-            # Create a new jobmask
-            seal = seals.get(seal_name) or (Seal(name=seal_name) if seal_name else None)
-            if seal and seal_name not in seals:
-                new_seals.append(seal)
+# Initialize seen servers set
+seen_servers = set()
 
-            new_jobmask = Jobmask(name=jobmask_name, seal=seal)
-            jobmasks[jobmask_name] = new_jobmask
-            jobmask_updates.append(new_jobmask)
+# Process each chunk and concatenate results
+final_df = pd.concat([process_data(chunk, seen_servers) for chunk in df])
 
-            for name in instance_names:
-                instance = instances.get(name) or Instance(name=name)
-                if name not in instances:
-                    new_instances.append(instance)
-                instance_jobmask_mapping[jobmask_name].append(instance)
+# Expand rows based on the 'api_result' column
+final_df = final_df.explode('api_result')
 
-    # Bulk create new instances and seals
-    if new_instances:
-        Instance.objects.bulk_create(new_instances)
-        instances.update({instance.name: instance for instance in new_instances})
-    if new_seals:
-        Seal.objects.bulk_create(new_seals)
-        seals.update({seal.name: seal for seal in new_seals})
-
-    # Bulk update jobmasks and add instances in bulk
-    Jobmask.objects.bulk_update(jobmask_updates, fields=['seal'])
-    for jobmask_name, inst_list in instance_jobmask_mapping.items():
-        jobmasks[jobmask_name].instance.add(*inst_list)
+print(final_df)
+---------------------------------------------------------
