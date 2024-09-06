@@ -211,3 +211,153 @@ With the given CSV input and the example API response:
 2. **Concurrency**: The use of threading allows the program to make API requests in parallel, reducing wait times.
 3. **Handling Large Data**: The program processes data in manageable chunks and ensures that the number of database/API queries is kept efficient.
 ----------------------------------------------------------
+#with dask without concurrent
+
+import dask.dataframe as dd
+import dask
+import requests
+from dask.delayed import delayed
+from concurrent.futures import ThreadPoolExecutor
+
+# Function to make API call for a server
+def call_api(server_name):
+    api_url = f"https://your_api_endpoint/{server_name}"
+    try:
+        response = requests.get(api_url)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            print(f"Error calling API for {server_name}: {response.status_code}")
+            return []
+    except Exception as e:
+        print(f"API call failed for {server_name}: {e}")
+        return []
+
+# Function to process each row
+def process_row(row, seen_servers):
+    server_name = row['server_name']
+
+    # Skip if server_name already seen
+    if server_name in seen_servers:
+        return []
+
+    # Make API call
+    api_results = call_api(server_name)
+
+    # Mark the server as processed
+    seen_servers.add(server_name)
+
+    # Expand the result into multiple rows, if needed
+    if not api_results:
+        return [(server_name, None)]  # Empty result case
+    else:
+        return [(server_name, result) for result in api_results]  # Multiple IPs
+
+# Function to process the entire dataframe chunk
+def process_chunk(df_chunk, seen_servers):
+    # Using Dask delayed to handle row-by-row processing
+    results = [delayed(process_row)(row, seen_servers) for _, row in df_chunk.iterrows()]
+    
+    # Compute results and flatten
+    results = dask.compute(*results)
+    flattened_results = [item for sublist in results for item in sublist]
+    
+    # Return as DataFrame
+    return pd.DataFrame(flattened_results, columns=['server_name', 'api_result'])
+
+# Main function
+def process_file(file_path):
+    # Read the CSV file in chunks using Dask
+    df = dd.read_csv(file_path)
+
+    # Initialize the seen servers set to track already processed servers
+    seen_servers = set()
+
+    # Process each chunk
+    results = df.map_partitions(process_chunk, seen_servers)
+
+    # Write the final results to CSV
+    results.to_csv('machine_with_api_results_dask.csv', single_file=True)
+
+# Call the main function
+process_file('machine.csv')
+---------------------------------------------------------
+#with dask with concurrent
+import dask.dataframe as dd
+import dask
+import requests
+from dask.delayed import delayed
+import pandas as pd
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# Function to make API call for a server
+def call_api(server_name):
+    api_url = f"https://your_api_endpoint/{server_name}"
+    try:
+        response = requests.get(api_url)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            print(f"Error calling API for {server_name}: {response.status_code}")
+            return []
+    except Exception as e:
+        print(f"API call failed for {server_name}: {e}")
+        return []
+
+# Function to process each row
+def process_row(row, seen_servers):
+    server_name = row['server_name']
+
+    # Skip if server_name already seen
+    if server_name in seen_servers:
+        return []
+
+    # Make API call
+    api_results = call_api(server_name)
+
+    # Mark the server as processed
+    seen_servers.add(server_name)
+
+    # Expand the result into multiple rows, if needed
+    if not api_results:
+        return [(server_name, None)]  # Empty result case
+    else:
+        return [(server_name, result) for result in api_results]  # Multiple IPs
+
+# Function to process an entire partition in parallel
+def process_chunk(df_chunk, seen_servers):
+    unique_server_names = df_chunk['server_name'].unique().tolist()
+
+    # Using ThreadPoolExecutor for concurrent API calls
+    results = []
+    with ThreadPoolExecutor() as executor:
+        futures = {executor.submit(process_row, {'server_name': server}, seen_servers): server for server in unique_server_names}
+        
+        for future in as_completed(futures):
+            server_name = futures[future]
+            try:
+                result = future.result()
+                results.extend(result)
+            except Exception as e:
+                print(f"Error processing {server_name}: {e}")
+
+    # Return results as DataFrame
+    return pd.DataFrame(results, columns=['server_name', 'api_result'])
+
+# Main function
+def process_file(file_path):
+    # Read the CSV file in chunks using Dask
+    df = dd.read_csv(file_path)
+
+    # Initialize the seen servers set to track already processed servers
+    seen_servers = set()
+
+    # Process each chunk
+    results = df.map_partitions(process_chunk, seen_servers)
+
+    # Write the final results to CSV
+    results.to_csv('machine_with_api_results_dask.csv', single_file=True)
+
+# Call the main function
+process_file('machine.csv')
+---------------------------------------------------------
