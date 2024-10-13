@@ -58,3 +58,36 @@ DATABASES = {
         },
     }
 }
+--------------------------------------------------------------------------------------------------
+from django.db import transaction
+from time import sleep
+from random import uniform
+from cockroachdb.errors import TransactionRetryWithProtoRefreshError
+
+MAX_RETRIES = 5  # Maximum number of retries for a transaction
+RETRY_DELAY_MIN = 0.1  # Minimum delay between retries in seconds
+RETRY_DELAY_MAX = 1.0  # Maximum delay between retries in seconds
+
+def bulk_insert_with_retry(record_df):
+    to_create = []
+    for _, row in record_df.iterrows():  # Assuming record_df is a DataFrame
+        to_create.append(MyModel(**row.to_dict()))
+
+    retries = 0
+
+    while retries < MAX_RETRIES:
+        try:
+            with transaction.atomic():
+                MyModel.objects.bulk_create(to_create, batch_size=15000)
+            # Break out of the loop if the transaction is successful
+            break
+        except TransactionRetryWithProtoRefreshError:
+            retries += 1
+            # Backoff and retry
+            if retries < MAX_RETRIES:
+                delay = uniform(RETRY_DELAY_MIN, RETRY_DELAY_MAX)
+                print(f"Transaction retry {retries}/{MAX_RETRIES}. Retrying in {delay:.2f} seconds...")
+                sleep(delay)
+            else:
+                print("Max retries reached. Failing.")
+                raise  # Reraise the exception if max retries exceeded
