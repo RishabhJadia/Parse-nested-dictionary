@@ -93,3 +93,65 @@ urlpatterns = [
     path('instances/<int:pk>/', InstanceDetailAPIView.as_view(), name='instance-detail'),  # Get instance by ID
     path('instances/env/<str:env>/', InstanceByEnvAPIView.as_view(), name='instance-by-env'),  # Get instances by environment
 ]
+---------------------------------------------------------------------------------------------
+from django.db.models import Prefetch, Q
+from rest_framework import generics
+from .models import Machine, Host
+from .serializers import MachineSerializer
+
+class MachineListView(generics.ListAPIView):
+    serializer_class = MachineSerializer
+
+    def get_queryset(self):
+        # Retrieve query parameters for filtering
+        host_filter_criteria = {
+            'status': self.request.query_params.get('host_status'),
+            'environment': self.request.query_params.get('host_environment'),
+            'country': self.request.query_params.get('host_country'),
+            'datacenter': self.request.query_params.get('host_datacenter'),
+            'hosts': self.request.query_params.get('hosts')  # New parameter for hosts
+        }
+
+        # Build a Q filter for the Host model
+        host_filter = Q()
+        for field, value in host_filter_criteria.items():
+            if value:
+                if field == 'hosts':
+                    # Handle case where hosts is null or contains comma-separated values
+                    if value == 'null':
+                        host_filter &= Q(**{f"{field}__isnull": True})
+                    else:
+                        # Split comma-separated values into a list and create Q objects
+                        host_names = [name.strip() for name in value.split(',')]
+                        host_filter &= Q(name__in=host_names)
+                elif value == 'null':
+                    host_filter &= Q(**{f"{field}__isnull": True})
+                else:
+                    host_filter &= Q(**{field: value})
+
+        # Base queryset for Machine
+        if host_filter_criteria['hosts'] == 'null':
+            # Filter machines with no hosts
+            queryset = Machine.objects.filter(hosts__isnull=True)
+        else:
+            # Prefetch related hosts and apply filters if hosts should not be empty
+            queryset = Machine.objects.prefetch_related(
+                Prefetch(
+                    'hosts',
+                    queryset=Host.objects.filter(host_filter).only('name', 'datacenter')
+                )
+            ).filter(hosts__in=Host.objects.filter(host_filter)).distinct()
+
+        return queryset
+
+    def get_serializer_context(self):
+        # Pass the filter values to the serializer context
+        context = super().get_serializer_context()
+        context.update({
+            'host_status': self.request.query_params.get('host_status'),
+            'host_environment': self.request.query_params.get('host_environment'),
+            'host_country': self.request.query_params.get('host_country'),
+            'host_datacenter': self.request.query_params.get('host_datacenter'),
+            'hosts': self.request.query_params.get('hosts'),  # New context for hosts
+        })
+        return context
