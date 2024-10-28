@@ -219,3 +219,90 @@ class JobListView(generics.ListAPIView):
             'host_datacenter': self.request.query_params.get('host_datacenter'),
         })
         return context
+---------------------------------------
+from django.db.models import Prefetch, Q
+from rest_framework import generics
+from .models import Job, Machine, Host, Instance
+
+class JobListView(generics.ListAPIView):
+    serializer_class = JobSerializer
+
+    def get_queryset(self):
+        # Retrieve query parameters for filtering Job, Instance, and Machine attributes
+        machine_null = self.request.query_params.get('machines')
+        
+        # Job attribute filters
+        job_filters = {
+            'name': self.request.query_params.get('job_name'),
+            'job_type': self.request.query_params.get('job_type'),
+        }
+        
+        # Instance attribute filters
+        instance_filters = {
+            'name': self.request.query_params.get('instance_name'),
+            'env': self.request.query_params.get('instance_env'),
+        }
+
+        # Build Job filters
+        job_filter = Q()
+        for field, value in job_filters.items():
+            if value:
+                job_filter &= Q(**{f"{field}": value})
+
+        # Build Instance filters
+        instance_filter = Q()
+        for field, value in instance_filters.items():
+            if value:
+                instance_filter &= Q(**{f"instance__{field}": value})
+        
+        # Host attribute filters
+        host_filter_criteria = {
+            'status': self.request.query_params.get('host_status'),
+            'environment': self.request.query_params.get('host_environment'),
+            'country': self.request.query_params.get('host_country'),
+            'datacenter': self.request.query_params.get('host_datacenter'),
+        }
+
+        # Build a Q filter for the Host model
+        host_filter = Q()
+        for field, value in host_filter_criteria.items():
+            if value:
+                if value == 'null':
+                    host_filter &= Q(**{f"{field}__isnull": True})
+                else:
+                    host_filter &= Q(**{field: value})
+
+        # Initialize an empty queryset for filtered_machines
+        filtered_machines = Machine.objects.none()
+
+        if machine_null != 'null':
+            # Prefetch machines with only hosts that match the host filter criteria
+            filtered_machines = Machine.objects.prefetch_related(
+                Prefetch(
+                    'hosts',
+                    queryset=Host.objects.filter(host_filter),
+                    to_attr='prefetched_hosts'
+                )
+            ).filter(hosts__in=Host.objects.filter(host_filter))  # Filter machines based on host criteria
+
+        # Combine job, instance, and machine filters
+        queryset = Job.objects.filter(
+            job_filter & instance_filter
+        ).filter(
+            Q(machines__isnull=True) if machine_null == 'null' else Q(machines__in=filtered_machines)
+        ).distinct().prefetch_related(
+            Prefetch('machines', queryset=filtered_machines)
+        )
+
+        return queryset
+
+    def get_serializer_context(self):
+        # Pass the filter values to the serializer context
+        context = super().get_serializer_context()
+        context.update({
+            'host_status': self.request.query_params.get('host_status'),
+            'host_environment': self.request.query_params.get('host_environment'),
+            'host_country': self.request.query_params.get('host_country'),
+            'host_datacenter': self.request.query_params.get('host_datacenter'),
+        })
+        return context
