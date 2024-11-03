@@ -306,3 +306,67 @@ class JobListView(generics.ListAPIView):
             'host_datacenter': self.request.query_params.get('host_datacenter'),
         })
         return context
+---------------------------------------------------------------------------
+from django.db.models import Count
+from django.utils import timezone
+from .models import Job, JobMetrics
+
+def update_job_metrics():
+    # Aggregate job count by host country
+    country_counts = Job.objects.values('machine__hosts__country').annotate(
+        job_country_count=Count('machine__hosts__country')
+    ).values('machine__hosts__country', 'job_country_count')
+
+    # Aggregate job count by host datacenter
+    datacenter_counts = Job.objects.values('machine__hosts__datacenter').annotate(
+        job_datacenter_count=Count('machine__hosts__datacenter')
+    ).values('machine__hosts__datacenter', 'job_datacenter_count')
+
+    # Fetch existing metrics into memory
+    existing_metrics = JobMetrics.objects.all()
+    existing_metrics_dict = { (m.country, m.datacenter): m for m in existing_metrics }
+
+    # List for bulk create/update
+    bulk_create_entries = []
+    bulk_update_entries = []
+
+    # Update or create the JobMetrics table with country counts
+    for country_data in country_counts:
+        country = country_data['machine__hosts__country']
+        job_country_count = country_data['job_country_count']
+        key = (country, None)  # Tuple key for country-only metrics
+        
+        if key in existing_metrics_dict:
+            metrics = existing_metrics_dict[key]
+            metrics.job_country_count = job_country_count
+            metrics.last_updated = timezone.now()
+            bulk_update_entries.append(metrics)
+        else:
+            bulk_create_entries.append(JobMetrics(
+                country=country,
+                job_country_count=job_country_count,
+                last_updated=timezone.now()
+            ))
+
+    # Update or create the JobMetrics table with datacenter counts
+    for datacenter_data in datacenter_counts:
+        datacenter = datacenter_data['machine__hosts__datacenter']
+        job_datacenter_count = datacenter_data['job_datacenter_count']
+        key = (None, datacenter)  # Tuple key for datacenter-only metrics
+        
+        if key in existing_metrics_dict:
+            metrics = existing_metrics_dict[key]
+            metrics.job_datacenter_count = job_datacenter_count
+            metrics.last_updated = timezone.now()
+            bulk_update_entries.append(metrics)
+        else:
+            bulk_create_entries.append(JobMetrics(
+                datacenter=datacenter,
+                job_datacenter_count=job_datacenter_count,
+                last_updated=timezone.now()
+            ))
+
+    # Perform bulk create and update
+    JobMetrics.objects.bulk_create(bulk_create_entries)
+    JobMetrics.objects.bulk_update(bulk_update_entries, ['job_country_count', 'job_datacenter_count', 'last_updated'])
+
