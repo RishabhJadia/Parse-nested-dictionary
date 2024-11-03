@@ -369,4 +369,30 @@ def update_job_metrics():
     # Perform bulk create and update
     JobMetrics.objects.bulk_create(bulk_create_entries)
     JobMetrics.objects.bulk_update(bulk_update_entries, ['job_country_count', 'job_datacenter_count', 'last_updated'])
+    -----------------------------------------------------------------
+from django.db.models import Count, Subquery, OuterRef, F
+from myapp.models import Job, MachineHostMapping, Host
+
+# Step 1: Find distinct Job IDs by Host country
+distinct_jobs_by_country = (
+    Host.objects
+    .filter(machinehostmapping__machine__job__isnull=False)  # Only consider hosts with related jobs
+    .values('country')  # Group by country
+    .annotate(
+        distinct_job_ids=Subquery(
+            Job.objects
+            .filter(
+                jobmachinemapping__machine__machinehostmapping__host=OuterRef('pk')
+            )
+            .values('id')
+            .distinct()
+        )
+    )
+    .annotate(job_count=Count('distinct_job_ids', distinct=True))
+)
+
+# Step 2: Get results with non-None country counts and None country counts separately
+non_none_country_counts = distinct_jobs_by_country.exclude(country__isnull=True)
+none_country_count = distinct_jobs_by_country.filter(country__isnull=True)
+
 
