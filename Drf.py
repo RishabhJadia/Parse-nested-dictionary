@@ -395,4 +395,85 @@ distinct_jobs_by_country = (
 non_none_country_counts = distinct_jobs_by_country.exclude(country__isnull=True)
 none_country_count = distinct_jobs_by_country.filter(country__isnull=True)
 
+----------------------------------------------------------------------------------------
+from django.db.models import Q, Count
+from rest_framework import viewsets
+from rest_framework.response import Response
+from .models import Machine
+from .serializers import MachineSerializer
+
+class MachineViewSet(viewsets.ViewSet):
+    def get_queryset(self):
+        # Prefetch related hosts and agent data for optimized querying
+        return Machine.objects.select_related('agent').prefetch_related('hosts')
+
+    def apply_operator_filter(self, queryset, filters, operator):
+        """Apply the operator filter to ensure all or any matching conditions."""
+        if operator == 'only':
+            # Annotate unique status/counts to match 'only' for each condition
+            if 'hosts__status' in filters:
+                queryset = queryset.annotate(
+                    unique_status_count=Count('hosts__status', distinct=True)
+                ).filter(unique_status_count=1)
+            if 'hosts__country' in filters:
+                queryset = queryset.annotate(
+                    unique_country_count=Count('hosts__country', distinct=True)
+                ).filter(unique_country_count=1)
+            if 'hosts__datacenter' in filters:
+                queryset = queryset.annotate(
+                    unique_datacenter_count=Count('hosts__datacenter', distinct=True)
+                ).filter(unique_datacenter_count=1)
+        # Apply the accumulated Q filters to the queryset
+        return queryset.filter(filters).distinct()
+
+    def list(self, request):
+        queryset = self.get_queryset()
+        
+        # Initialize Q object for accumulating filters
+        filters = Q()
+        
+        # Apply filters based on request parameters
+        machine_type = request.query_params.get('machine_type')
+        host_status = request.query_params.get('host_status')
+        host_country = request.query_params.get('host_country')
+        host_datacenter = request.query_params.get('host_datacenter')
+        operator = request.query_params.get('operator', 'any')
+
+        # Filter by machine_type
+        if machine_type:
+            filters &= Q(machine_type=machine_type)
+
+        # Consolidated host status filters
+        if host_status:
+            if host_status == 'null':
+                filters &= Q(hosts__isnull=True)
+            elif operator == 'only':
+                filters &= Q(hosts__status=host_status)
+            else:
+                filters |= Q(hosts__status=host_status)
+
+        # Filter by host country
+        if host_country:
+            if host_country == 'null':
+                filters &= Q(hosts__country__isnull=True)
+            elif operator == 'only':
+                filters &= Q(hosts__country=host_country)
+            else:
+                filters |= Q(hosts__country=host_country)
+
+        # Filter by host datacenter
+        if host_datacenter:
+            if host_datacenter == 'null':
+                filters &= Q(hosts__datacenter__isnull=True)
+            elif operator == 'only':
+                filters &= Q(hosts__datacenter=host_datacenter)
+            else:
+                filters |= Q(hosts__datacenter=host_datacenter)
+
+        # Apply the filters and distinct to ensure unique Machine records
+        queryset = self.apply_operator_filter(queryset, filters, operator)
+
+        # Serialize the final queryset
+        serializer = MachineSerializer(queryset, many=True)
+        return Response(serializer.data)
 
