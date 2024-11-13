@@ -396,8 +396,8 @@ non_none_country_counts = distinct_jobs_by_country.exclude(country__isnull=True)
 none_country_count = distinct_jobs_by_country.filter(country__isnull=True)
 
 ----------------------------------------------------------------------------------------
-from django.db.models import Q, Prefetch
-from .models import Machine, Host, HostSealDeploymentMapping
+from django.db.models import Q, Prefetch, Count
+from .models import Machine, Host, MachineHostMapping
 from .serializers import MachineSerializer
 from rest_framework import viewsets
 
@@ -479,59 +479,49 @@ class MachineViewSet(viewsets.ViewSet):
 
         host_filter = get_host_filter()
         
-        # Prefetch related host seal deployment data
-        host_seal_deployment_prefetch = Prefetch(
-            'host_host_seal_deployment_mapping',
-            queryset=HostSealDeploymentMapping.objects.select_related('seal_deployment__seal', 'seal_deployment__deployment'),
-            to_attr='prefetched_host_seal_deployments'
-        )
-
-        # Filter hosts based on criteria
-        filtered_hosts = Host.objects.using(environment).filter(host_filter).only(
-            'name', 'environment', 'platform', 'datacenter', 'region', 'country', 'city', 'status'
-        )
-
-        # Setup machine query
-        machine_host_mapping_prefetch = Prefetch('hosts', queryset=filtered_hosts, to_attr='filtered_hosts')
-        
+        # Filter machines based on hosts with only the specified status (match_mode = "only")
         if match_mode == 'only' and required_host_status:
-            # Filter for machines where all hosts have only the specified status
+            # Find machines whose all hosts have the specified status only
             queryset = (Machine.objects.using(environment)
                         .filter(query)
-                        .annotate(host_count=models.Count('hosts'))
-                        .filter(
-                            hosts__status=required_host_status,
-                            hosts__count=models.Count('hosts')
+                        .annotate(total_hosts=Count('hosts'), matched_hosts=Count('hosts', filter=Q(hosts__status=required_host_status)))
+                        .filter(total_hosts=Count('hosts'), total_hosts=models.F('matched_hosts'))
+                        .select_related('agent')
+                        .only(
+                            'name', 'machine_type', 'node_name', 'alias_type', 'is_active', 
+                            'agent__name', 'agent__platform', 'agent__version'
                         )
-                        .select_related('agent', 'instance').only(
-                            'name', 'machine_type', 'node_name', 'alias_type', 'is_active', 'agent__name',
-                            'agent__platform', 'agent__version', 'instance__name'
-                        )
-                        .prefetch_related(machine_host_mapping_prefetch))
-        
-        elif host_filter_criteria['host'] == 'null':
-            queryset = (Machine.objects.using(environment).filter(query).filter(hosts__isnull=True)
-                        .select_related('agent', 'instance').only(
-                            'name', 'machine_type', 'node_name', 'alias_type', 'is_active', 'agent__name',
-                            'agent__platform', 'agent__version', 'instance__name'
-                        )
-                        .prefetch_related(machine_host_mapping_prefetch))
-        
-        elif host_filter: 
-            queryset = (Machine.objects.using(environment).filter(query).filter(hosts__in=filtered_hosts)
-                        .select_related('agent', 'instance').only(
-                            'name', 'machine_type', 'node_name', 'alias_type', 'is_active', 'agent__name',
-                            'agent__platform', 'agent__version', 'instance__name'
-                        )
-                        .prefetch_related(machine_host_mapping_prefetch))
-        
-        else:
-            queryset = (Machine.objects.using(environment).filter(query)
-                        .select_related('agent', 'instance').only(
-                            'name', 'machine_type', 'node_name', 'alias_type', 'is_active', 'agent__name',
-                            'agent__platform', 'agent__version', 'instance__name'
-                        )
-                        .prefetch_related(machine_host_mapping_prefetch))
-        
-        return queryset.distinct().order_by('id')
+                        .prefetch_related(Prefetch('hosts', queryset=Host.objects.filter(host_filter).only(
+                            'name', 'environment', 'platform', 'datacenter', 'region', 'country', 'city', 'status'))))
 
+        elif host_filter_criteria['host'] == 'null':
+            # Fetch machines with no associated hosts
+            queryset = (Machine.objects.using(environment)
+                        .filter(query, hosts__isnull=True)
+                        .select_related('agent')
+                        .only(
+                            'name', 'machine_type', 'node_name', 'alias_type', 'is_active', 
+                            'agent__name', 'agent__platform', 'agent__version'
+                        ))
+
+        elif host_filter:
+            # Machines with filtered hosts
+            queryset = (Machine.objects.using(environment)
+                        .filter(query)
+                        .filter(hosts__in=Host.objects.using(environment).filter(host_filter))
+                        .select_related('agent')
+                        .only(
+                            'name', 'machine_type', 'node_name', 'alias_type', 'is_active', 
+                            'agent__name', 'agent__platform', 'agent__version'
+                        ))
+
+        else:
+            queryset = (Machine.objects.using(environment)
+                        .filter(query)
+                        .select_related('agent')
+                        .only(
+                            'name', 'machine_type', 'node_name', 'alias_type', 'is_active', 
+                            'agent__name', 'agent__platform', 'agent__version'
+                        ))
+
+        return queryset.distinct().order_by('id')
