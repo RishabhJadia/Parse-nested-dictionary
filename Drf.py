@@ -396,84 +396,142 @@ non_none_country_counts = distinct_jobs_by_country.exclude(country__isnull=True)
 none_country_count = distinct_jobs_by_country.filter(country__isnull=True)
 
 ----------------------------------------------------------------------------------------
-from django.db.models import Q, Count
-from rest_framework import viewsets
-from rest_framework.response import Response
-from .models import Machine
+from django.db.models import Q, Prefetch
+from .models import Machine, Host, HostSealDeploymentMapping
 from .serializers import MachineSerializer
+from rest_framework import viewsets
 
 class MachineViewSet(viewsets.ViewSet):
     def get_queryset(self):
-        # Prefetch related hosts and agent data for optimized querying
-        return Machine.objects.select_related('agent').prefetch_related('hosts')
+        # Fetch query parameters
+        params = self.request.query_params
+        environment = params.get('environment', None)
+        name = params.get('name', None)
+        machine_type = params.get('machine_type', None)
+        node_name = params.get('node_name', None)
+        alias_type = params.get('alias_type', None)
+        agent_name = params.get('agent_name', None)
+        agent_version = params.get('agent_version', None)
+        agent_platform = params.get('agent_platform', None)
+        instance = params.get('instance', None)
+        match_mode = params.get('match_mode', 'any')  # Default to 'any'
+        required_host_status = params.get('host_status', None)  # Filter for specific host status
 
-    def apply_operator_filter(self, queryset, filters, operator):
-        """Apply the operator filter to ensure all or any matching conditions."""
-        if operator == 'only':
-            # Annotate unique status/counts to match 'only' for each condition
-            if 'hosts__status' in filters:
-                queryset = queryset.annotate(
-                    unique_status_count=Count('hosts__status', distinct=True)
-                ).filter(unique_status_count=1)
-            if 'hosts__country' in filters:
-                queryset = queryset.annotate(
-                    unique_country_count=Count('hosts__country', distinct=True)
-                ).filter(unique_country_count=1)
-            if 'hosts__datacenter' in filters:
-                queryset = queryset.annotate(
-                    unique_datacenter_count=Count('hosts__datacenter', distinct=True)
-                ).filter(unique_datacenter_count=1)
-        # Apply the accumulated Q filters to the queryset
-        return queryset.filter(filters).distinct()
-
-    def list(self, request):
-        queryset = self.get_queryset()
+        # Build the main query filter using Q objects
+        query = Q()
         
-        # Initialize Q object for accumulating filters
-        filters = Q()
+        if name:
+            query &= Q(name=name.strip())
         
-        # Apply filters based on request parameters
-        machine_type = request.query_params.get('machine_type')
-        host_status = request.query_params.get('host_status')
-        host_country = request.query_params.get('host_country')
-        host_datacenter = request.query_params.get('host_datacenter')
-        operator = request.query_params.get('operator', 'any')
-
-        # Filter by machine_type
         if machine_type:
-            filters &= Q(machine_type=machine_type)
-
-        # Consolidated host status filters
-        if host_status:
-            if host_status == 'null':
-                filters &= Q(hosts__isnull=True)
-            elif operator == 'only':
-                filters &= Q(hosts__status=host_status)
+            if machine_type.strip() == "null":
+                query &= Q(machine_type__isnull=True)
             else:
-                filters |= Q(hosts__status=host_status)
-
-        # Filter by host country
-        if host_country:
-            if host_country == 'null':
-                filters &= Q(hosts__country__isnull=True)
-            elif operator == 'only':
-                filters &= Q(hosts__country=host_country)
+                query &= Q(machine_type=machine_type.strip())
+        
+        if node_name:
+            if node_name.strip() == "null":
+                query &= Q(node_name__isnull=True)
             else:
-                filters |= Q(hosts__country=host_country)
-
-        # Filter by host datacenter
-        if host_datacenter:
-            if host_datacenter == 'null':
-                filters &= Q(hosts__datacenter__isnull=True)
-            elif operator == 'only':
-                filters &= Q(hosts__datacenter=host_datacenter)
+                query &= Q(node_name=node_name.strip())
+        
+        if alias_type:
+            if alias_type.strip() == "null":
+                query &= Q(alias_type__isnull=True)
             else:
-                filters |= Q(hosts__datacenter=host_datacenter)
+                query &= Q(alias_type=alias_type.strip().lower())
+        
+        if agent_name:
+            if agent_name.strip() == "null":
+                query &= Q(agent__name__isnull=True)
+            else:
+                query &= Q(agent__name=agent_name.strip())
+        
+        if agent_version:
+            if agent_version.strip() == "null":
+                query &= Q(agent__version__isnull=True)
+            else:
+                query &= Q(agent__version=agent_version.strip())
+        
+        # Define host filter criteria
+        host_filter_criteria = {
+            'host': params.get('host', None),
+            'environment': params.get('host_environment', None),
+            'datacenter': params.get('host_datacenter', None),
+            'region': params.get('host_region', None),
+            'country': params.get('host_country', None),
+            'status': required_host_status,  # Use this for filtering specific status
+        }
+        
+        # Get host filters
+        def get_host_filter():
+            host_filter = Q()
+            for field, value in host_filter_criteria.items():
+                if value:
+                    if field == 'host':
+                        host_names = [name.strip() for name in value.split(',')]
+                        host_filter &= Q(name__in=host_names)
+                    elif value == "null":
+                        host_filter &= Q(**{f"{field}__isnull": True})
+                    else:
+                        host_filter &= Q(**{field: value})
+            return host_filter
 
-        # Apply the filters and distinct to ensure unique Machine records
-        queryset = self.apply_operator_filter(queryset, filters, operator)
+        host_filter = get_host_filter()
+        
+        # Prefetch related host seal deployment data
+        host_seal_deployment_prefetch = Prefetch(
+            'host_host_seal_deployment_mapping',
+            queryset=HostSealDeploymentMapping.objects.select_related('seal_deployment__seal', 'seal_deployment__deployment'),
+            to_attr='prefetched_host_seal_deployments'
+        )
 
-        # Serialize the final queryset
-        serializer = MachineSerializer(queryset, many=True)
-        return Response(serializer.data)
+        # Filter hosts based on criteria
+        filtered_hosts = Host.objects.using(environment).filter(host_filter).only(
+            'name', 'environment', 'platform', 'datacenter', 'region', 'country', 'city', 'status'
+        )
+
+        # Setup machine query
+        machine_host_mapping_prefetch = Prefetch('hosts', queryset=filtered_hosts, to_attr='filtered_hosts')
+        
+        if match_mode == 'only' and required_host_status:
+            # Filter for machines where all hosts have only the specified status
+            queryset = (Machine.objects.using(environment)
+                        .filter(query)
+                        .annotate(host_count=models.Count('hosts'))
+                        .filter(
+                            hosts__status=required_host_status,
+                            hosts__count=models.Count('hosts')
+                        )
+                        .select_related('agent', 'instance').only(
+                            'name', 'machine_type', 'node_name', 'alias_type', 'is_active', 'agent__name',
+                            'agent__platform', 'agent__version', 'instance__name'
+                        )
+                        .prefetch_related(machine_host_mapping_prefetch))
+        
+        elif host_filter_criteria['host'] == 'null':
+            queryset = (Machine.objects.using(environment).filter(query).filter(hosts__isnull=True)
+                        .select_related('agent', 'instance').only(
+                            'name', 'machine_type', 'node_name', 'alias_type', 'is_active', 'agent__name',
+                            'agent__platform', 'agent__version', 'instance__name'
+                        )
+                        .prefetch_related(machine_host_mapping_prefetch))
+        
+        elif host_filter: 
+            queryset = (Machine.objects.using(environment).filter(query).filter(hosts__in=filtered_hosts)
+                        .select_related('agent', 'instance').only(
+                            'name', 'machine_type', 'node_name', 'alias_type', 'is_active', 'agent__name',
+                            'agent__platform', 'agent__version', 'instance__name'
+                        )
+                        .prefetch_related(machine_host_mapping_prefetch))
+        
+        else:
+            queryset = (Machine.objects.using(environment).filter(query)
+                        .select_related('agent', 'instance').only(
+                            'name', 'machine_type', 'node_name', 'alias_type', 'is_active', 'agent__name',
+                            'agent__platform', 'agent__version', 'instance__name'
+                        )
+                        .prefetch_related(machine_host_mapping_prefetch))
+        
+        return queryset.distinct().order_by('id')
 
