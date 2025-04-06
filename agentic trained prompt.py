@@ -689,3 +689,250 @@ for i, test_input in enumerate(test_cases, 1):
     result = graph.invoke(initial_state)
     for message in result["messages"]:
         print(f"{message.type}: {message.content}")
+----------------------------------------------------------
+
+from langchain_core.language_models.llms import LLM
+from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.prompts import PromptTemplate
+from langgraph.graph import StateGraph, END, MessageGraph
+from typing import Optional, List, Dict, Any
+import requests
+import json
+from langchain_core.tools import tool
+
+# Enhanced PromptTemplate with comprehensive synonym support
+multi_tool_prompt_template = PromptTemplate(
+    input_variables=["history", "input"],
+    template="""
+You are an assistant handling casual conversation, Jobmask API (GET and PATCH), and Weather API requests.
+
+1. **Casual Conversation**: For greetings, questions, or non-API requests (e.g., "Hi", "What is Autosys?"), respond with plain text.
+2. **Jobmask API (GET)**:
+   - Required: environment (e.g., "prod", "dev", "test"), product ("autosys" or "controlm")
+   - Optional: seal (string), name (string), page_size (string, default "10")
+   - Synonyms for "get": "get", "retrieve", "fetch", "list", "show", "display", "pull", "grab"
+   - Environment synonyms: "production" → "prod", "development" → "dev", "testing" → "test"
+   - Product synonyms: "auto" → "autosys", "ctrl" → "controlm"
+   - If input or history implies a GET intent (e.g., "jobmask" with "get" synonyms), return: {"action": "call_tool", "tool": "jobmask", "query_params": {...}, "context": "..."}
+   - If parameters are missing/invalid, return: {"error": "...", "message": "..."}
+3. **Jobmask API (PATCH)**:
+   - Required: environment, product, name, seal
+   - Synonyms for "patch": "update", "modify", "change", "edit", "alter", "adjust", "revise"
+   - Use same environment/product synonym mapping as GET
+   - If input or history implies a PATCH intent, return: {"action": "call_tool", "tool": "jobmask_patch", "query_params": {...}, "context": "..."}
+   - If parameters are missing/invalid, return: {"error": "...", "message": "..."}
+4. **Weather API**:
+   - Required: city (string)
+   - Synonyms for "weather": "weather", "forecast", "temperature", "climate"
+   - If input mentions weather synonyms or "city", return: {"action": "call_tool", "tool": "weather", "query_params": {"city": "..."}, "context": "..."}
+
+Conversation history:
+{history}
+
+User input:
+{input}
+
+Return plain text for casual responses or a JSON object for tool requests/errors. Response will be wrapped in {"Message": <your_response>}.
+"""
+)
+
+# Custom LLM class
+class CustomLLM(LLM):
+    model_name: str = "custom_model"
+    api_endpoint: str = "http://your-api-host/chat/invoke"  # Replace with your endpoint
+    
+    def __init__(self, api_endpoint: Optional[str] = None):
+        super().__init__()
+        if api_endpoint:
+            self.api_endpoint = api_endpoint
+    
+    def _call(self, prompt: str, stop: Optional[List[str]] = None, **kwargs: Any) -> str:
+        payload = {"Questions": prompt}
+        try:
+            response = requests.post(self.api_endpoint, json=payload)
+            response.raise_for_status()
+            api_response = response.json()
+            return json.dumps({"Message": api_response.get("Message", "Error: 'Message' key missing")})
+        except requests.exceptions.RequestException as e:
+            return json.dumps({"Message": f"Failed to call /chat/invoke: {str(e)}"})
+    
+    @property
+    def _llm_type(self) -> str:
+        return "custom_llm"
+    
+    @property
+    def _identifying_params(self) -> Dict[str, Any]:
+        return {"model_name": self.model_name, "api_endpoint": self.api_endpoint}
+
+# Instantiate the LLM
+custom_llm = CustomLLM(api_endpoint="http://your-api-host/chat/invoke")
+
+# Define Jobmask GET tool
+@tool
+def jobmask_tool(query_params: Dict[str, str]) -> str:
+    """Tool to call Jobmask API with GET request."""
+    try:
+        api_url = "https://api.jobmask.com/search"  # Replace with actual URL
+        response = requests.get(api_url, params=query_params)
+        response.raise_for_status()
+        return json.dumps({"result": response.json()})
+    except requests.exceptions.RequestException as e:
+        return json.dumps({"error": f"Jobmask GET failed: {str(e)}"})
+
+# Define Jobmask PATCH tool
+@tool
+def jobmask_patch_tool(query_params: Dict[str, str]) -> str:
+    """Tool to call Jobmask API with PATCH request."""
+    try:
+        api_url = "https://api.jobmask.com/update"  # Replace with actual URL
+        response = requests.patch(api_url, json=query_params)
+        response.raise_for_status()
+        return json.dumps({"result": response.json()})
+    except requests.exceptions.RequestException as e:
+        return json.dumps({"error": f"Jobmask PATCH failed: {str(e)}"})
+
+# Define Weather tool
+@tool
+def weather_tool(query_params: Dict[str, str]) -> str:
+    """Tool to call Weather API."""
+    try:
+        api_url = "https://api.weather.example.com/weather"  # Replace with actual URL
+        response = requests.get(api_url, params=query_params)
+        response.raise_for_status()
+        return json.dumps({"result": response.json()})
+    except requests.exceptions.RequestException as e:
+        return json.dumps({"error": f"Weather API failed: {str(e)}"})
+
+# LLM Node
+def llm_node(state: MessageGraph) -> MessageGraph:
+    last_message = state["messages"][-1]
+    if isinstance(last_message, HumanMessage):
+        history = "\n".join([msg.content for msg in state["messages"][:-1]])
+        prompt = multi_tool_prompt_template.format(history=history, input=last_message.content)
+        response = custom_llm(prompt)
+        state["messages"].append(AIMessage(content=response))
+    return state
+
+# Tool Nodes
+def jobmask_tool_node(state: MessageGraph) -> MessageGraph:
+    last_message = json.loads(state["messages"][-1].content)["Message"]
+    inner_content = json.loads(last_message) if isinstance(last_message, str) else last_message
+    if inner_content.get("action") == "call_tool" and inner_content.get("tool") == "jobmask":
+        result = jobmask_tool(inner_content["query_params"])
+        state["messages"].append(AIMessage(content=result))
+    return state
+
+def jobmask_patch_tool_node(state: MessageGraph) -> MessageGraph:
+    last_message = json.loads(state["messages"][-1].content)["Message"]
+    inner_content = json.loads(last_message) if isinstance(last_message, str) else last_message
+    if inner_content.get("action") == "call_tool" and inner_content.get("tool") == "jobmask_patch":
+        result = jobmask_patch_tool(inner_content["query_params"])
+        state["messages"].append(AIMessage(content=result))
+    return state
+
+def weather_tool_node(state: MessageGraph) -> MessageGraph:
+    last_message = json.loads(state["messages"][-1].content)["Message"]
+    inner_content = json.loads(last_message) if isinstance(last_message, str) else last_message
+    if inner_content.get("action") == "call_tool" and inner_content.get("tool") == "weather":
+        result = weather_tool(inner_content["query_params"])
+        state["messages"].append(AIMessage(content=result))
+    return state
+
+# Router Function
+def router_function(state: MessageGraph) -> str:
+    last_message = json.loads(state["messages"][-1].content)["Message"]
+    try:
+        inner_content = json.loads(last_message) if isinstance(last_message, str) else last_message
+        if inner_content.get("action") == "call_tool":
+            tool_name = inner_content.get("tool")
+            if tool_name == "jobmask":
+                return "jobmask_tool"
+            elif tool_name == "jobmask_patch":
+                return "jobmask_patch_tool"
+            elif tool_name == "weather":
+                return "weather_tool"
+    except json.JSONDecodeError:
+        pass
+    return END
+
+# Build Graph
+graph_builder = StateGraph(MessageGraph)
+graph_builder.add_node("llm", llm_node)
+graph_builder.add_node("jobmask_tool", jobmask_tool_node)
+graph_builder.add_node("jobmask_patch_tool", jobmask_patch_tool_node)
+graph_builder.add_node("weather_tool", weather_tool_node)
+graph_builder.set_entry_point("llm")
+graph_builder.add_conditional_edges("llm", router_function)
+graph_builder.add_edge("jobmask_tool", END)
+graph_builder.add_edge("jobmask_patch_tool", END)
+graph_builder.add_edge("weather_tool", END)
+graph = graph_builder.compile()
+
+# 30 Test Cases Covering All Scenarios
+test_cases = [
+    # Casual Conversation
+    "Hi, how are you?",
+    "What is Autosys?",
+    "Tell me about Control-M",
+    
+    # Jobmask GET - Valid
+    "Get jobmask for autosys in prod",
+    "Retrieve jobmask for controlm in dev",
+    "List jobmask for auto in production",
+    "Show jobmask for ctrl in test with page_size 5",
+    "Fetch jobmask for autosys in prod with seal 123",
+    "Display jobmask for controlm in dev with name job1",
+    "Pull jobmask for autosys in test",
+    
+    # Jobmask GET - Invalid/Missing Params
+    "Get jobmask for prod",  # Missing product
+    "Retrieve jobmask for auto",  # Missing environment
+    "Show jobmask with seal 123",  # Missing both
+    "List jobmask for invalid in prod",  # Invalid product
+    
+    # Jobmask PATCH - Valid
+    "Update jobmask for autosys in prod with name job1 and seal 456",
+    "Modify jobmask for controlm in dev with name job2 and seal 789",
+    "Change jobmask for auto in test with name job3 and seal 101",
+    "Edit jobmask for ctrl in production with name job4 and seal 112",
+    
+    # Jobmask PATCH - Invalid/Missing Params
+    "Update jobmask for autosys in prod",  # Missing name, seal
+    "Modify jobmask for controlm with name job5",  # Missing environment, seal
+    "Change jobmask with seal 999",  # Missing all required
+    "Edit jobmask for invalid in dev with name job6 and seal 333",  # Invalid product
+    
+    # Weather API - Valid
+    "What’s the weather in New York?",
+    "Show me the forecast for London",
+    "Get temperature in Tokyo",
+    "Check climate in Sydney",
+    
+    # Weather API - Invalid/Missing Params
+    "What’s the weather?",  # Missing city
+    
+    # Multi-Turn Scenarios
+    "Fetch jobmask for prod",  # Missing product
+    "Autosys",  # Follow-up providing product
+    "Adjust jobmask in test with name job7",  # Missing seal
+    "seal 444"  # Follow-up providing seal
+]
+
+# Run Test Cases
+for i, test_input in enumerate(test_cases, 1):
+    print(f"\nTest Case {i}: {test_input}")
+    initial_state = {"messages": [HumanMessage(content=test_input)]}
+    if i > 27:  # Simulate multi-turn by reusing prior state for cases 28-30
+        if i == 28:
+            state = graph.invoke({"messages": [HumanMessage(content=test_cases[27])]})
+            result = graph.invoke({"messages": state["messages"] + [HumanMessage(content=test_input)]})
+        elif i == 29:
+            state = graph.invoke({"messages": [HumanMessage(content=test_cases[28])]})
+            result = graph.invoke({"messages": state["messages"] + [HumanMessage(content=test_input)]})
+        elif i == 30:
+            state = graph.invoke({"messages": [HumanMessage(content=test_cases[29])]})
+            result = graph.invoke({"messages": state["messages"] + [HumanMessage(content=test_input)]})
+    else:
+        result = graph.invoke(initial_state)
+    for message in result["messages"]:
+        print(f"{message.type}: {message.content}")
