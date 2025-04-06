@@ -547,4 +547,145 @@ result = graph.invoke(initial_state)
 print("\nTest 2 Output:")
 for message in result["messages"]:
     print(f"{message.type}: {message.content}")
+----------------------------------------------------------------------------------------------------
+from langchain_core.language_models.llms import LLM
+from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.prompts import PromptTemplate
+from langgraph.graph import StateGraph, END, MessageState
+from typing import Optional, List, Dict, Any
+import requests
+import json
 
+# Define the PromptTemplate for Jobmask API
+jobmask_prompt_template = PromptTemplate(
+    input_variables=["history", "input"],
+    template="""
+You are an assistant that processes user requests for the Jobmask API. The API requires:
+- Required parameters: environment (string), product (string)
+- Optional parameters: seal (string), name (string), page_size (string, default "10")
+
+Given the conversation history and user input, extract the parameters and return a JSON response.
+- If all required parameters are present, return: {"action": "call_tool", "query_params": {...}, "context": "..."}
+- If any required parameters are missing, return: {"error": "...", "message": "..."}
+
+Conversation history:
+{history}
+
+User input:
+{input}
+
+Return your response as a JSON string.
+"""
+)
+
+# Define the CustomLLM with API call
+class CustomLLM(LLM):
+    model_name: str = "custom_model"
+    prompt_template: PromptTemplate
+    api_endpoint: str = "http://your-api-host/chat/invoke"  # Replace with actual endpoint
+    
+    def __init__(self, prompt_template: PromptTemplate, api_endpoint: Optional[str] = None):
+        super().__init__()
+        self.prompt_template = prompt_template
+        if api_endpoint:
+            self.api_endpoint = api_endpoint
+    
+    def _call(self, prompt: str, stop: Optional[List[str]] = None, **kwargs: Any) -> str:
+        # Get history from kwargs (passed via state)
+        history = kwargs.get("history", [])
+        history_str = "\n".join([msg.content for msg in history])
+        
+        # Format the prompt using the PromptTemplate
+        formatted_prompt = self.prompt_template.format(history=history_str, input=prompt)
+        
+        # Prepare payload for /chat/invoke
+        payload = {"Questions": formatted_prompt}
+        
+        # Call the external API
+        try:
+            response = requests.post(self.api_endpoint, json=payload)
+            response.raise_for_status()
+            # Assume the API returns JSON directly
+            return response.text  # Return raw JSON string
+        except requests.exceptions.RequestException as e:
+            return json.dumps({"error": f"Failed to call /chat/invoke: {str(e)}"})
+    
+    @property
+    def _llm_type(self) -> str:
+        return "custom_llm"
+    
+    @property
+    def _identifying_params(self) -> Dict[str, Any]:
+        return {"model_name": self.model_name, "prompt_template": str(self.prompt_template), "api_endpoint": self.api_endpoint}
+
+# Instantiate the custom LLM with the PromptTemplate and API endpoint
+custom_llm = CustomLLM(prompt_template=jobmask_prompt_template, api_endpoint="http://your-api-host/chat/invoke")
+
+# Define the LLM node
+def llm_node(state: MessageState) -> MessageState:
+    last_message = state["messages"][-1]
+    if isinstance(last_message, HumanMessage):
+        # Pass full history as context
+        response = custom_llm(last_message.content, history=state["messages"][:-1])
+        state["messages"].append(AIMessage(content=response))
+    return state
+
+# Define the search tool
+@tool
+def search_jobmask_api(query_params: Dict[str, str]) -> str:
+    """Tool to call the Jobmask API with query parameters."""
+    try:
+        api_url = "https://api.jobmask.com/search"  # Replace with actual Jobmask API URL
+        response = requests.get(api_url, params=query_params)
+        response.raise_for_status()
+        data = response.json()
+        return json.dumps({"result": data})
+    except requests.exceptions.RequestException as e:
+        return json.dumps({"error": f"API call failed: {str(e)}"})
+
+# Define the tool node
+def tool_node(state: MessageState) -> MessageState:
+    # Get the LLM's JSON response (last message)
+    llm_response = json.loads(state["messages"][-1].content)
+    if llm_response.get("action") == "call_tool":
+        query_params = llm_response["query_params"]
+        result = search_jobmask_api(query_params)
+        state["messages"].append(AIMessage(content=result))
+    return state
+
+# Define the router function
+def router_function(state: MessageState) -> str:
+    # Parse the LLM's JSON response
+    last_message = state["messages"][-1].content
+    try:
+        response = json.loads(last_message)
+        if response.get("action") == "call_tool":
+            return "tool"
+    except json.JSONDecodeError:
+        pass
+    return END
+
+# Create the graph
+graph_builder = StateGraph(MessageState)
+graph_builder.add_node("llm", llm_node)
+graph_builder.add_node("tool", tool_node)
+graph_builder.set_entry_point("llm")
+graph_builder.add_conditional_edges("llm", router_function)
+graph_builder.add_edge("tool", END)
+graph = graph_builder.compile()
+
+# Test cases
+test_cases = [
+    "Get all the jobmask for product autosys of prod environment",
+    "Get all the jobmask for product autosys of prod environment with page_size 10",
+    "Get all the jobmask for product autosys of prod environment with page_size 10 and seal 12345",
+    "Get seal for product autosys of prod environment with page_size 10 and name slrad",
+    "Get jobmask with seal 12345"  # Corner case: missing required params
+]
+
+for i, test_input in enumerate(test_cases, 1):
+    print(f"\nTest Case {i}: {test_input}")
+    initial_state = {"messages": [HumanMessage(content=test_input)]}
+    result = graph.invoke(initial_state)
+    for message in result["messages"]:
+        print(f"{message.type}: {message.content}")
