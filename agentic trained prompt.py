@@ -455,3 +455,96 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+----------------------------------------------------
+#Langgraph
+from langchain_core.language_models.llms import LLM
+from langchain_core.messages import HumanMessage, AIMessage
+from langgraph.graph import StateGraph, END
+from typing import Optional, List, Dict, Any, TypedDict, Annotated
+from langchain.tools import tool
+
+# Define the CustomLLM
+class CustomLLM(LLM):
+    """A custom LLM with simple logic."""
+    model_name: str = "custom_model"
+    
+    def _call(self, prompt: str, stop: Optional[List[str]] = None, **kwargs: Any) -> str:
+        """Custom logic: Echoes the prompt or suggests a search."""
+        if "search" in prompt.lower():
+            return "I suggest searching for this!"
+        return f"Custom response to: {prompt}"
+    
+    @property
+    def _llm_type(self) -> str:
+        return "custom_llm"
+    
+    @property
+    def _identifying_params(self) -> Dict[str, Any]:
+        return {"model_name": self.model_name}
+
+# Instantiate the custom LLM
+custom_llm = CustomLLM()
+
+# Define the state
+class State(TypedDict):
+    messages: Annotated[list, "A list of messages"]
+
+# Define the LLM node
+def llm_node(state: State) -> State:
+    last_message = state["messages"][-1]
+    if isinstance(last_message, HumanMessage):
+        response = custom_llm(last_message.content)
+        state["messages"].append(AIMessage(content=response))
+    return state
+
+# Define the search tool
+@tool
+def search_web(query: str) -> str:
+    """Mock web search tool."""
+    return f"Search results for {query}"
+
+# Define the tool node
+def tool_node(state: State) -> State:
+    last_message = state["messages"][-1].content
+    result = search_web(last_message)
+    state["messages"].append(AIMessage(content=result))
+    return state
+
+# Create the graph
+graph_builder = StateGraph(State)
+
+# Add nodes
+graph_builder.add_node("llm", llm_node)
+graph_builder.add_node("tool", tool_node)
+
+# Define entry point
+graph_builder.set_entry_point("llm")
+
+# Add conditional edges from LLM node
+graph_builder.add_conditional_edges(
+    "llm",
+    lambda state: "tool" if "search" in state["messages"][-1].content.lower() else END
+)
+
+# Add edge from tool to end
+graph_builder.add_edge("tool", END)
+
+# Compile the graph
+graph = graph_builder.compile()
+
+# Test the graph
+# Test Case 1: Normal input
+initial_state = {"messages": [HumanMessage(content="Hello, how are you?")]}
+result = graph.invoke(initial_state)
+print("Test 1 Output:")
+for message in result["messages"]:
+    print(f"{message.type}: {message.content}")
+
+# Test Case 2: Trigger the search tool
+initial_state = {"messages": [HumanMessage(content="Search for AI news")]}
+result = graph.invoke(initial_state)
+print("\nTest 2 Output:")
+for message in result["messages"]:
+    print(f"{message.type}: {message.content}")
+
