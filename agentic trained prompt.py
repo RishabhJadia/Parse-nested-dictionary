@@ -1717,3 +1717,323 @@ if __name__ == "__main__":
     print("Starting Streamlit application")
     main()
  ------------------------------------------------------
+#Prodution level code with JsonOutputParse, StructuredOutput, streamlit
+import streamlit as st
+from langchain_core.language_models.llms import LLM
+from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import JsonOutputParser
+from langgraph.graph import StateGraph, END, MessageGraph
+from typing import Optional, Dict, Any
+from pydantic import BaseModel, Field
+from langchain_core.tools import StructuredTool
+import requests
+
+# Enhanced PromptTemplate (Removed page_size default)
+multi_tool_prompt_template = PromptTemplate(
+    input_variables=["history", "input"],
+    template="""
+You are an assistant handling casual conversation, Jobmask API (GET and PATCH), and Weather API requests.
+
+1. **Casual Conversation**: For greetings, questions, or non-API requests (e.g., "Hi", "What is Autosys?"), respond with plain text.
+2. **Jobmask API (GET)**:
+   - Required: environment (e.g., "prod", "dev", "test"), product ("autosys" or "controlm")
+   - Optional: seal (string), name (string), page_size (string)
+   - Synonyms for "get": "get", "retrieve", "fetch", "list", "show", "display", "pull", "grab"
+   - Environment synonyms: "production" → "prod", "development" → "dev", "testing" → "test"
+   - Product synonyms: "auto" → "autosys", "ctrl" → "controlm"
+   - If input or history implies a GET intent, return: {"action": "call_tool", "tool": "jobmask", "query_params": {...}, "context": "..."}
+   - If parameters are missing/invalid, return: {"error": "...", "message": "..."}
+3. **Jobmask API (PATCH)**:
+   - Required: environment, product, name, seal
+   - Synonyms for "patch": "update", "modify", "change", "edit", "alter", "adjust", "revise"
+   - Use same environment/product synonym mapping as GET
+   - If input or history implies a PATCH intent, return: {"action": "call_tool", "tool": "jobmask_patch", "query_params": {...}, "context": "..."}
+   - If parameters are missing/invalid, return: {"error": "...", "message": "..."}
+4. **Weather API**:
+   - Required: city (string)
+   - Synonyms for "weather": "weather", "forecast", "temperature", "climate"
+   - If input mentions weather synonyms or "city", return: {"action": "call_tool", "tool": "weather", "query_params": {"city": "..."}, "context": "..."}
+
+Conversation history:
+{history}
+
+User input:
+{input}
+
+Return plain text for casual responses or a dict for tool requests/errors (e.g., {"action": "call_tool", ...}). Response will be wrapped in {"Message": <your_response>}.
+"""
+)
+
+# Initialize JsonOutputParser
+json_parser = JsonOutputParser()
+
+# Custom LLM class
+class CustomLLM(LLM):
+    model_name: str = "custom_model"
+    api_endpoint: str = "http://your-api-host/chat/invoke"
+    
+    def __init__(self, api_endpoint: Optional[str] = None):
+        super().__init__()
+        if api_endpoint:
+            self.api_endpoint = api_endpoint
+    
+    def _call(self, prompt: str, stop: Optional[List[str]] = None, **kwargs: Any) -> str:
+        print(f"Calling LLM with prompt: {prompt}")
+        payload = {"Questions": prompt}
+        try:
+            response = requests.post(self.api_endpoint, json=payload, timeout=10)
+            response.raise_for_status()
+            api_response = response.json()
+            result = {"Message": api_response.get("Message", "Error: 'Message' key missing")}
+            print(f"LLM response: {result}")
+            return str(result)
+        except requests.exceptions.RequestException as e:
+            error_msg = {"Message": f"Failed to call /chat/invoke: {str(e)}"}
+            print(f"LLM error: {error_msg}")
+            return str(error_msg)
+    
+    @property
+    def _llm_type(self) -> str:
+        return "custom_llm"
+    
+    @property
+    def _identifying_params(self) -> Dict[str, Any]:
+        return {"model_name": self.model_name, "api_endpoint": self.api_endpoint}
+
+# Pydantic schemas for tools (Removed page_size default from schema)
+class JobmaskGetInput(BaseModel):
+    environment: str = Field(..., description="Environment (e.g., prod, dev, test)")
+    product: str = Field(..., description="Product (e.g., autosys, controlm)")
+    seal: Optional[str] = Field(None, description="Optional seal")
+    name: Optional[str] = Field(None, description="Optional name")
+    page_size: Optional[str] = Field(None, description="Optional page size")  # No default here
+
+class JobmaskPatchInput(BaseModel):
+    environment: str = Field(..., description="Environment (e.g., prod, dev, test)")
+    product: str = Field(..., description="Product (e.g., autosys, controlm)")
+    name: str = Field(..., description="Job name")
+    seal: str = Field(..., description="Seal value")
+
+class WeatherInput(BaseModel):
+    city: str = Field(..., description="City name")
+
+class ToolOutput(BaseModel):
+    result: Optional[Dict] = Field(None, description="API response")
+    error: Optional[str] = Field(None, description="Error message if failed")
+
+# Define Tools (Added page_size default in jobmask_get_func)
+def jobmask_get_func(input: JobmaskGetInput) -> ToolOutput:
+    print(f"Jobmask GET tool called with params: {input}")
+    # Set default page_size at the API level if not provided
+    params = input.dict(exclude_none=True)
+    if "page_size" not in params:
+        params["page_size"] = "10"  # Default value applied here
+    try:
+        api_url = "https://api.jobmask.com/search"
+        response = requests.get(api_url, params=params, timeout=5)
+        response.raise_for_status()
+        return ToolOutput(result=response.json())
+    except requests.exceptions.RequestException as e:
+        return ToolOutput(error=f"Jobmask GET failed: {str(e)}")
+
+def jobmask_patch_func(input: JobmaskPatchInput) -> ToolOutput:
+    print(f"Jobmask PATCH tool called with params: {input}")
+    try:
+        api_url = "https://api.jobmask.com/update"
+        response = requests.patch(api_url, json=input.dict(), timeout=5)
+        response.raise_for_status()
+        return ToolOutput(result=response.json())
+    except requests.exceptions.RequestException as e:
+        return ToolOutput(error=f"Jobmask PATCH failed: {str(e)}")
+
+def weather_func(input: WeatherInput) -> ToolOutput:
+    print(f"Weather tool called with params: {input}")
+    try:
+        api_url = "https://api.weather.example.com/weather"
+        response = requests.get(api_url, params=input.dict(), timeout=5)
+        response.raise_for_status()
+        return ToolOutput(result=response.json())
+    except requests.exceptions.RequestException as e:
+        return ToolOutput(error=f"Weather API failed: {str(e)}")
+
+jobmask_tool = StructuredTool.from_function(
+    func=jobmask_get_func,
+    name="jobmask",
+    description="Tool to call Jobmask API with GET request",
+    args_schema=JobmaskGetInput,
+    return_schema=ToolOutput
+)
+
+jobmask_patch_tool = StructuredTool.from_function(
+    func=jobmask_patch_func,
+    name="jobmask_patch",
+    description="Tool to call Jobmask API with PATCH request",
+    args_schema=JobmaskPatchInput,
+    return_schema=ToolOutput
+)
+
+weather_tool = StructuredTool.from_function(
+    func=weather_func,
+    name="weather",
+    description="Tool to call Weather API",
+    args_schema=WeatherInput,
+    return_schema=ToolOutput
+)
+
+# Graph Setup
+def setup_graph():
+    custom_llm = CustomLLM()
+    
+    def llm_node(state: MessageGraph) -> MessageGraph:
+        last_message = state["messages"][-1]
+        if isinstance(last_message, HumanMessage):
+            history = "\n".join([msg.content for msg in state["messages"][:-1]])
+            prompt = multi_tool_prompt_template.format(history=history, input=last_message.content)
+            response = custom_llm(prompt)
+            state["messages"].append(AIMessage(content=response))
+            print(f"LLM node processed. State: {state}")
+        return state
+
+    def jobmask_tool_node(state: MessageGraph) -> MessageGraph:
+        last_message = state["messages"][-1].content
+        try:
+            parsed_response = json_parser.parse(last_message)
+            inner_content = parsed_response["Message"]
+            if isinstance(inner_content, dict) and inner_content.get("action") == "call_tool" and inner_content.get("tool") == "jobmask":
+                result = jobmask_tool.invoke(inner_content["query_params"])
+                state["messages"].append(AIMessage(content=result.model_dump_json()))
+                print(f"Jobmask tool node processed. State: {state}")
+        except Exception as e:
+            print(f"Error parsing Jobmask response: {str(e)}")
+        return state
+
+    def jobmask_patch_tool_node(state: MessageGraph) -> MessageGraph:
+        last_message = state["messages"][-1].content
+        try:
+            parsed_response = json_parser.parse(last_message)
+            inner_content = parsed_response["Message"]
+            if isinstance(inner_content, dict) and inner_content.get("action") == "call_tool" and inner_content.get("tool") == "jobmask_patch":
+                result = jobmask_patch_tool.invoke(inner_content["query_params"])
+                state["messages"].append(AIMessage(content=result.model_dump_json()))
+                print(f"Jobmask PATCH tool node processed. State: {state}")
+        except Exception as e:
+            print(f"Error parsing Jobmask PATCH response: {str(e)}")
+        return state
+
+    def weather_tool_node(state: MessageGraph) -> MessageGraph:
+        last_message = state["messages"][-1].content
+        try:
+            parsed_response = json_parser.parse(last_message)
+            inner_content = parsed_response["Message"]
+            if isinstance(inner_content, dict) and inner_content.get("action") == "call_tool" and inner_content.get("tool") == "weather":
+                result = weather_tool.invoke(inner_content["query_params"])
+                state["messages"].append(AIMessage(content=result.model_dump_json()))
+                print(f"Weather tool node processed. State: {state}")
+        except Exception as e:
+            print(f"Error parsing Weather response: {str(e)}")
+        return state
+
+    def router_function(state: MessageGraph) -> str:
+        last_message = state["messages"][-1].content
+        try:
+            parsed_response = json_parser.parse(last_message)
+            inner_content = parsed_response["Message"]
+            if isinstance(inner_content, dict) and inner_content.get("action") == "call_tool":
+                tool_name = inner_content.get("tool")
+                print(f"Routing to tool: {tool_name}")
+                if tool_name == "jobmask":
+                    return "jobmask_tool"
+                elif tool_name == "jobmask_patch":
+                    return "jobmask_patch_tool"
+                elif tool_name == "weather":
+                    return "weather_tool"
+        except Exception as e:
+            print(f"Routing error: {str(e)}. Defaulting to END")
+        return END
+
+    graph_builder = StateGraph(MessageGraph)
+    graph_builder.add_node("llm", llm_node)
+    graph_builder.add_node("jobmask_tool", jobmask_tool_node)
+    graph_builder.add_node("jobmask_patch_tool", jobmask_patch_tool_node)
+    graph_builder.add_node("weather_tool", weather_tool_node)
+    graph_builder.set_entry_point("llm")
+    graph_builder.add_conditional_edges("llm", router_function)
+    graph_builder.add_edge("jobmask_tool", END)
+    graph_builder.add_edge("jobmask_patch_tool", END)
+    graph_builder.add_edge("weather_tool", END)
+    graph = graph_builder.compile()
+    print("Graph setup completed")
+    return graph
+
+# Streamlit App
+def main():
+    st.set_page_config(page_title="Multi-Tool Chat Assistant", layout="wide")
+    st.title("Multi-Tool Chat Assistant")
+    st.markdown("Interact with Jobmask API (GET/PATCH) and Weather API, or have a casual conversation!")
+
+    # Define avatars
+    USER_AVATAR = "👤"
+    ASSISTANT_AVATAR = "🤖"
+
+    # Initialize session state
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+        print("Initialized empty message list in session state")
+    if "graph" not in st.session_state:
+        st.session_state.graph = setup_graph()
+        print("Graph initialized in session state")
+
+    # Display chat history
+    for message in st.session_state.messages:
+        avatar = USER_AVATAR if message["role"] == "user" else ASSISTANT_AVATAR
+        with st.chat_message(message["role"], avatar=avatar):
+            st.write(message["content"])
+
+    # Chat input
+    if prompt := st.chat_input("Type your message here..."):
+        # Add user message
+        with st.chat_message("user", avatar=USER_AVATAR):
+            st.write(prompt)
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        print(f"User message added: {prompt}")
+
+        # Process with graph
+        initial_state = {"messages": [HumanMessage(content=prompt)]}
+        if st.session_state.messages[:-1]:  # If there's history
+            history = [HumanMessage(content=m["content"]) if m["role"] == "user" else AIMessage(content=m["content"]) 
+                      for m in st.session_state.messages[:-1]]
+            initial_state["messages"] = history + initial_state["messages"]
+            print(f"Processing with history: {len(history)} previous messages")
+        
+        with st.spinner("Processing your request..."):
+            result = st.session_state.graph.invoke(initial_state)
+            print(f"Graph invocation completed. Result messages: {len(result['messages'])}")
+        
+        # Display assistant response
+        response = result["messages"][-1].content
+        try:
+            parsed_response = json_parser.parse(response)
+            display_content = parsed_response.get("Message", response)
+            if isinstance(display_content, dict):
+                display_content = json.dumps(display_content, indent=2)  # For display only
+            elif isinstance(display_content, str):
+                try:
+                    inner_content = json_parser.parse(display_content)
+                    if isinstance(inner_content, dict):
+                        display_content = json.dumps(inner_content, indent=2)  # For display only
+                except Exception:
+                    pass  # Keep as string if not JSON
+        except Exception as e:
+            display_content = f"Error parsing response: {str(e)}. Raw response: {response}"
+            print(f"Response parsing error: {str(e)}")
+        
+        with st.chat_message("assistant", avatar=ASSISTANT_AVATAR):
+            st.write(display_content)
+        st.session_state.messages.append({"role": "assistant", "content": display_content})
+        print(f"Assistant response added: {display_content}")
+
+if __name__ == "__main__":
+    print("Starting Streamlit application")
+    main()
+  -------------------------------------------------------------------------------------------
