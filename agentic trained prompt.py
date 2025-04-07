@@ -690,8 +690,362 @@ for i, test_input in enumerate(test_cases, 1):
     for message in result["messages"]:
         print(f"{message.type}: {message.content}")
 ----------------------------------------------------------
+# instead of tool return answer. LLM return with casual conversation
 
 from langchain_core.language_models.llms import LLM
+from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.prompts import PromptTemplate
+from langgraph.graph import StateGraph, END, MessageState
+from typing import Optional, List, Dict, Any
+import requests
+import json
+
+# Updated PromptTemplate without Weather tool
+multi_tool_prompt_template = PromptTemplate(
+    input_variables=["history", "input", "tool_result"],
+    template="""
+You are an assistant that can handle casual conversation and Jobmask API requests.
+
+1. **Casual Conversation**: For greetings, questions, or general inquiries (e.g., "Hi, how are you?", "What is Autosys?"), respond with a plain text friendly and informative reply (e.g., "I'm doing great, thanks!" or "Autosys is a job scheduling software...").
+2. **Jobmask API**: Requires:
+   - Required: environment (string), product (string)
+   - Optional: seal (string), name (string), page_size (string, default "10")
+   - If input relates to "jobmask" or mentions "product"/"environment", return: {"action": "call_tool", "tool": "jobmask", "query_params": {...}, "context": "..."}
+   - If required parameters are missing, return: {"error": "...", "message": "..."}
+
+**Tool Result Handling**:
+- If a tool result is provided (in JSON format), interpret it and return a human-readable response based on the tool and context.
+- For "jobmask" results, summarize job listings or relevant data in a natural way (e.g., "I found some job listings for Autosys in the production environment...").
+- If the tool result contains an error, explain the issue clearly (e.g., "There was an issue fetching the job listings...").
+
+Conversation history:
+{history}
+
+User input:
+{input}
+
+Tool result (if any):
+{tool_result}
+
+Return your response as either plain text (for casual input) or a JSON object (for tool requests). The response will be wrapped in {"Message": <your_response>} by the system.
+"""
+)
+
+# Define the CustomLLM with API call
+class CustomLLM(LLM):
+    model_name: str = "custom_model"
+    api_endpoint: str = "http://your-api-host/chat/invoke"  # Replace with actual endpoint
+    
+    def __init__(self, api_endpoint: Optional[str] = None):
+        super().__init__()
+        if api_endpoint:
+            self.api_endpoint = api_endpoint
+    
+    def _call(self, prompt: str, stop: Optional[List[str]] = None, **kwargs: Any) -> str:
+        payload = {"Questions": prompt}
+        try:
+            response = requests.post(self.api_endpoint, json=payload)
+            response.raise_for_status()
+            api_response = response.json()
+            return json.dumps({"Message": api_response.get("Mesaage", "Error: 'Mesaage' key missing")})
+        except requests.exceptions.RequestException as e:
+            return json.dumps({"Message": f"Failed to call /chat/invoke: {str(e)}"})
+    
+    @property
+    def _llm_type(self) -> str:
+        return "custom_llm"
+    
+    @property
+    def _identifying_params(self) -> Dict[str, Any]:
+        return {"model_name": self.model_name, "api_endpoint": self.api_endpoint}
+
+# Instantiate the custom LLM
+custom_llm = CustomLLM(api_endpoint="http://your-api-host/chat/invoke")
+
+# Define a generic LLM node with prompt formatting
+def llm_node(state: MessageState) -> MessageState:
+    last_message = state["messages"][-1]
+    if isinstance(last_message, HumanMessage) or isinstance(last_message, AIMessage):
+        history = state["messages"][:-1]
+        history_str = "\n".join([msg.content for msg in history])
+        tool_result = state.get("tool_result", "")  # Get tool result if present
+        
+        # Format the prompt with history, input, and tool result
+        input_content = last_message.content if isinstance(last_message, HumanMessage) else json.loads(last_message.content).get("Message", "")
+        formatted_prompt = multi_tool_prompt_template.format(history=history_str, input=input_content, tool_result=tool_result)
+        
+        # Call the LLM
+        response = custom_llm(formatted_prompt)
+        state["messages"].append(AIMessage(content=response))
+        state["tool_result"] = ""  # Clear tool result after processing
+    return state
+
+# Define the Jobmask tool
+@tool
+def jobmask_tool(query_params: Dict[str, str]) -> str:
+    """Tool to call the Jobmask API with query parameters."""
+    try:
+        api_url = "https://api.jobmask.com/search"  # Replace with actual Jobmask API URL
+        response = requests.get(api_url, params=query_params)
+        response.raise_for_status()
+        data = response.json()
+        return json.dumps({"result": data})
+    except requests.exceptions.RequestException as e:
+        return json.dumps({"error": f"Jobmask API call failed: {str(e)}"})
+
+# Define the Jobmask tool node
+def jobmask_tool_node(state: MessageState) -> MessageState:
+    last_message = json.loads(state["messages"][-1].content)
+    message_content = last_message["Message"]
+    inner_content = json.loads(message_content) if isinstance(message_content, str) else message_content
+    if inner_content.get("action") == "call_tool" and inner_content.get("tool") == "jobmask":
+        query_params = inner_content["query_params"]
+        result = jobmask_tool(query_params)
+        state["tool_result"] = result  # Store the raw tool result
+        state["messages"].append(AIMessage(content=message_content))  # Pass original message back
+    return state
+
+# Define the router function
+def router_function(state: MessageState) -> str:
+    last_message = json.loads(state["messages"][-1].content)
+    message_content = last_message["Message"]
+    
+    try:
+        inner_content = json.loads(message_content) if isinstance(message_content, str) else message_content
+        if inner_content.get("action") == "call_tool":
+            tool_name = inner_content.get("tool")
+            if tool_name == "jobmask":
+                return "jobmask_tool"
+    except json.JSONDecodeError:
+        pass
+    
+    # If there's a tool result, route back to LLM for formatting
+    if state.get("tool_result"):
+        return "llm"
+    return END
+
+# Create the graph
+graph_builder = StateGraph(MessageState)
+graph_builder.add_node("llm", llm_node)
+graph_builder.add_node("jobmask_tool", jobmask_tool_node)
+graph_builder.set_entry_point("llm")
+graph_builder.add_conditional_edges("llm", router_function)
+graph_builder.add_edge("jobmask_tool", "llm")  # Route back to LLM after tool
+graph = graph_builder.compile()
+
+# Test cases
+test_cases = [
+    "Hi, how are you?",
+    "Get all the jobmask for product autosys of prod environment",
+    "Get all the jobmask for product autosys of prod environment with page_size 10 and seal 12345",
+    "Get jobmask with seal 12345",  # Corner case: missing required params
+    "What is Autosys?",
+    "Hello, tell me about jobmask"
+]
+
+for i, test_input in enumerate(test_cases, 1):
+    print(f"\nTest Case {i}: {test_input}")
+    initial_state = {"messages": [HumanMessage(content=test_input)], "tool_result": ""}
+    result = graph.invoke(initial_state)
+    for message in result["messages"]:
+        print(f"{message.type}: {message.content}")
+
+
+------------------------------------------------------------
+# instead of getting output frim tool get output from llm with weather mock data and casual conversation
+from langchain_core.language_models.llms import LLM
+from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.prompts import PromptTemplate
+from langgraph.graph import StateGraph, END, MessageState
+from typing import Optional, List, Dict, Any
+import requests
+import json
+
+# Updated PromptTemplate to handle tool results
+multi_tool_prompt_template = PromptTemplate(
+    input_variables=["history", "input", "tool_result"],
+    template="""
+You are an assistant that can handle casual conversation, Jobmask API requests, and Weather API requests.
+
+1. **Casual Conversation**: For greetings or questions (e.g., "Hi, how are you?"), respond with a plain text friendly reply (e.g., "I'm doing great, thanks!").
+2. **Jobmask API**: Requires:
+   - Required: environment (string), product (string)
+   - Optional: seal (string), name (string), page_size (string, default "10")
+   - If input relates to "jobmask" or mentions "product"/"environment", return: {"action": "call_tool", "tool": "jobmask", "query_params": {...}, "context": "..."}
+   - If required parameters are missing, return: {"error": "...", "message": "..."}
+3. **Weather API**: Requires:
+   - Required: city (string)
+   - If input relates to "weather" or mentions "city", return: {"action": "call_tool", "tool": "weather", "query_params": {"city": "..."}, "context": "..."}
+
+**Tool Result Handling**:
+- If a tool result is provided (in JSON format), interpret it and return a human-readable response based on the tool and context.
+- For "jobmask" results, summarize job listings or relevant data.
+- For "weather" results, describe the weather conditions in natural language.
+- If the tool result contains an error, explain the issue clearly.
+
+Conversation history:
+{history}
+
+User input:
+{input}
+
+Tool result (if any):
+{tool_result}
+
+Return your response as either plain text (for casual input) or a JSON object (for tool requests). The response will be wrapped in {"Message": <your_response>} by the system.
+"""
+)
+
+# Define the CustomLLM with API call
+class CustomLLM(LLM):
+    model_name: str = "custom_model"
+    api_endpoint: str = "http://your-api-host/chat/invoke"  # Replace with actual endpoint
+    
+    def __init__(self, api_endpoint: Optional[str] = None):
+        super().__init__()
+        if api_endpoint:
+            self.api_endpoint = api_endpoint
+    
+    def _call(self, prompt: str, stop: Optional[List[str]] = None, **kwargs: Any) -> str:
+        payload = {"Questions": prompt}
+        try:
+            response = requests.post(self.api_endpoint, json=payload)
+            response.raise_for_status()
+            api_response = response.json()
+            return json.dumps({"Message": api_response.get("Mesaage", "Error: 'Mesaage' key missing")})
+        except requests.exceptions.RequestException as e:
+            return json.dumps({"Message": f"Failed to call /chat/invoke: {str(e)}"})
+    
+    @property
+    def _llm_type(self) -> str:
+        return "custom_llm"
+    
+    @property
+    def _identifying_params(self) -> Dict[str, Any]:
+        return {"model_name": self.model_name, "api_endpoint": self.api_endpoint}
+
+# Instantiate the custom LLM
+custom_llm = CustomLLM(api_endpoint="http://your-api-host/chat/invoke")
+
+# Define a generic LLM node with prompt formatting
+def llm_node(state: MessageState) -> MessageState:
+    last_message = state["messages"][-1]
+    if isinstance(last_message, HumanMessage) or isinstance(last_message, AIMessage):
+        history = state["messages"][:-1]
+        history_str = "\n".join([msg.content for msg in history])
+        tool_result = state.get("tool_result", "")  # Get tool result if present
+        
+        # Format the prompt with history, input, and tool result
+        input_content = last_message.content if isinstance(last_message, HumanMessage) else json.loads(last_message.content).get("Message", "")
+        formatted_prompt = multi_tool_prompt_template.format(history=history_str, input=input_content, tool_result=tool_result)
+        
+        # Call the LLM
+        response = custom_llm(formatted_prompt)
+        state["messages"].append(AIMessage(content=response))
+        state["tool_result"] = ""  # Clear tool result after processing
+    return state
+
+# Define the Jobmask tool
+def jobmask_tool(query_params: Dict[str, str]) -> str:
+    """Tool to call the Jobmask API with query parameters."""
+    try:
+        api_url = "https://api.jobmask.com/search"  # Replace with actual Jobmask API URL
+        response = requests.get(api_url, params=query_params)
+        response.raise_for_status()
+        data = response.json()
+        return json.dumps({"result": data})
+    except requests.exceptions.RequestException as e:
+        return json.dumps({"error": f"Jobmask API call failed: {str(e)}"})
+
+# Define the Weather tool
+def weather_tool(query_params: Dict[str, str]) -> str:
+    """Tool to call the Weather API with query parameters."""
+    try:
+        api_url = "https://api.weather.example.com/weather"  # Replace with actual Weather API URL
+        response = requests.get(api_url, params=query_params)
+        response.raise_for_status()
+        data = response.json()
+        return json.dumps({"result": data})
+    except requests.exceptions.RequestException as e:
+        return json.dumps({"error": f"Weather API call failed: {str(e)}"})
+
+# Define the Jobmask tool node
+def jobmask_tool_node(state: MessageState) -> MessageState:
+    last_message = json.loads(state["messages"][-1].content)
+    message_content = last_message["Message"]
+    inner_content = json.loads(message_content) if isinstance(message_content, str) else message_content
+    if inner_content.get("action") == "call_tool" and inner_content.get("tool") == "jobmask":
+        query_params = inner_content["query_params"]
+        result = jobmask_tool(query_params)
+        state["tool_result"] = result  # Store the raw tool result
+        state["messages"].append(AIMessage(content=message_content))  # Pass original message back
+    return state
+
+# Define the Weather tool node
+def weather_tool_node(state: MessageState) -> MessageState:
+    last_message = json.loads(state["messages"][-1].content)
+    message_content = last_message["Message"]
+    inner_content = json.loads(message_content) if isinstance(message_content, str) else message_content
+    if inner_content.get("action") == "call_tool" and inner_content.get("tool") == "weather":
+        query_params = inner_content["query_params"]
+        result = weather_tool(query_params)
+        state["tool_result"] = result  # Store the raw tool result
+        state["messages"].append(AIMessage(content=message_content))  # Pass original message back
+    return state
+
+# Define the router function
+def router_function(state: MessageState) -> str:
+    last_message = json.loads(state["messages"][-1].content)
+    message_content = last_message["Message"]
+    
+    try:
+        inner_content = json.loads(message_content) if isinstance(message_content, str) else message_content
+        if inner_content.get("action") == "call_tool":
+            tool_name = inner_content.get("tool")
+            if tool_name == "jobmask":
+                return "jobmask_tool"
+            elif tool_name == "weather":
+                return "weather_tool"
+    except json.JSONDecodeError:
+        pass
+    
+    # If there's a tool result, route back to LLM for formatting
+    if state.get("tool_result"):
+        return "llm"
+    return END
+
+# Create the graph
+graph_builder = StateGraph(MessageState)
+graph_builder.add_node("llm", llm_node)
+graph_builder.add_node("jobmask_tool", jobmask_tool_node)
+graph_builder.add_node("weather_tool", weather_tool_node)
+graph_builder.set_entry_point("llm")
+graph_builder.add_conditional_edges("llm", router_function)
+graph_builder.add_edge("jobmask_tool", "llm")  # Route back to LLM after tool
+graph_builder.add_edge("weather_tool", "llm")  # Route back to LLM after tool
+graph = graph_builder.compile()
+
+# Test cases
+test_cases = [
+    "Hi, how are you?",
+    "Get all the jobmask for product autosys of prod environment",
+    "Get weather for city London",
+    "Get all the jobmask for product autosys of prod environment with page_size 10 and seal 12345",
+    "Get jobmask with seal 12345",  # Corner case: missing required params
+    "What’s the weather like in New York?",
+    "Hello, tell me about the weather and jobmask"  # Ambiguous case
+]
+
+for i, test_input in enumerate(test_cases, 1):
+    print(f"\nTest Case {i}: {test_input}")
+    initial_state = {"messages": [HumanMessage(content=test_input)], "tool_result": ""}
+    result = graph.invoke(initial_state)
+    for message in result["messages"]:
+        print(f"{message.type}: {message.content}")
+
+-----------------------------------------------------------+-------
+# Multi tool call with casual conversati----------------------------
+from aage_models.llms import LLM
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.prompts import PromptTemplate
 from langgraph.graph import StateGraph, END, MessageGraph
