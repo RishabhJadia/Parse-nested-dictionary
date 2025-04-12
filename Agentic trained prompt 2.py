@@ -736,7 +736,7 @@ def main():
 if __name__ == "__main__":
     main()
 ---------------------------------------------------------------------------------------------------
-- Cache implementation, Chat history, welcome message (GROK)
+- Cache implementation, Chat history (Strict Empty Chat Prevention), welcome message (Sidebar Welcome Button),  (GROK)
 import streamlit as st
 from langchain_core.language_models.llms import LLM
 from langchain_core.messages import HumanMessage, AIMessage
@@ -804,10 +804,9 @@ Return your response as either plain text (for casual input or invalid product) 
 """
 )
 
-# Define the CustomLLM with API call
 class CustomLLM(LLM):
     model_name: str = "custom_model"
-    api_endpoint: str = "http://your-api-host/chat/invoke"  # Replace with actual endpoint
+    api_endpoint: str = "http://your-api-host/chat/invoke"
     
     def __init__(self, api_endpoint: Optional[str] = None):
         super().__init__()
@@ -832,33 +831,27 @@ class CustomLLM(LLM):
     def _identifying_params(self) -> Dict[str, Any]:
         return {"model_name": self.model_name, "api_endpoint": self.api_endpoint}
 
-# Instantiate the custom LLM
 custom_llm = CustomLLM(api_endpoint="http://your-api-host/chat/invoke")
 
-# Define a generic LLM node
 def llm_node(state: MessageState) -> MessageState:
     last_message = state["messages"][-1]
     if isinstance(last_message, HumanMessage) or isinstance(last_message, AIMessage):
         history = state["messages"][:-1]
         history_str = "\n".join([msg.content for msg in history])
         
-        # Format the prompt
         input_content = last_message.content if isinstance(last_message, HumanMessage) else json.loads(last_message.content).get("Message", "")
         formatted_prompt = multi_tool_prompt_template.format(history=history_str, input=input_content)
         
-        # Call the LLM
         response = custom_llm(formatted_prompt)
         state["messages"].append(AIMessage(content=response))
     return state
 
-# Define the Jobmask tool with default page_size
 def jobmask_tool(query_params: Dict[str, str]) -> str:
-    """Tool to call the Jobmask API with query parameters, defaulting page_size to 10."""
     if "page_size" not in query_params:
         query_params["page_size"] = "10"
     
     try:
-        api_url = "https://api.jobmask.com/search"  # Replace with actual Jobmask API URL
+        api_url = "https://api.jobmask.com/search"
         response = requests.get(api_url, params=query_params)
         response.raise_for_status()
         data = response.json()
@@ -866,9 +859,17 @@ def jobmask_tool(query_params: Dict[str, str]) -> str:
     except requests.exceptions.RequestException as e:
         return json.dumps({"error": f"Jobmask API call failed: {str(e)}"})
 
-# Define a caching check function
+def weather_tool(query_params: Dict[str, str]) -> str:
+    try:
+        api_url = "https://api.openweathermap.org/data/2.5/weather"
+        response = requests.get(api_url, params=query_params)
+        response.raise_for_status()
+        data = response.json()
+        return json.dumps({"result": data})
+    except requests.exceptions.RequestException as e:
+        return json.dumps({"error": f"Weather API call failed: {str(e)}"})
+
 def check_cache(state: MessageState) -> Optional[Dict[str, Any]]:
-    """Check the conversation history for a cached Jobmask result with identical query_params."""
     last_message = json.loads(state["messages"][-1].content)
     message_content = last_message["Message"]
     inner_content = json.loads(message_content) if isinstance(message_content, str) else message_content
@@ -894,7 +895,6 @@ def check_cache(state: MessageState) -> Optional[Dict[str, Any]]:
                     continue
     return None
 
-# Define the Jobmask tool node with caching
 def jobmask_tool_node(state: MessageState) -> MessageState:
     cached_result = check_cache(state)
     if cached_result:
@@ -909,23 +909,6 @@ def jobmask_tool_node(state: MessageState) -> MessageState:
             state["messages"].append(AIMessage(content=result))
     return state
 
-# Define the Weather tool (placeholder implementation)
-def weather_tool(query_params: Dict[str, str]) -> str:
-    """Tool to call the Weather API with query parameters."""
-    try:
-        api_url = "https://api.weatherapi.com/v1/current.json"  # Replace with actual Weather API URL
-        api_key = "your_weather_api_key"  # Replace with actual API key
-        params = {"key": api_key, "q": query_params["location"]}
-        if "units" in query_params:
-            params["units"] = query_params["units"]
-        response = requests.get(api_url, params=params)
-        response.raise_for_status()
-        data = response.json()
-        return json.dumps({"result": data})
-    except requests.exceptions.RequestException as e:
-        return json.dumps({"error": f"Weather API call failed: {str(e)}"})
-
-# Define the Weather tool node
 def weather_tool_node(state: MessageState) -> MessageState:
     last_message = json.loads(state["messages"][-1].content)
     message_content = last_message["Message"]
@@ -936,7 +919,6 @@ def weather_tool_node(state: MessageState) -> MessageState:
         state["messages"].append(AIMessage(content=result))
     return state
 
-# Define the router function with caching check
 def router_function(state: MessageState) -> str:
     last_message = json.loads(state["messages"][-1].content)
     message_content = last_message["Message"]
@@ -954,7 +936,6 @@ def router_function(state: MessageState) -> str:
     
     return END
 
-# Create the graph
 graph_builder = StateGraph(MessageState)
 graph_builder.add_node("llm", llm_node)
 graph_builder.add_node("jobmask_tool", jobmask_tool_node)
@@ -965,162 +946,434 @@ graph_builder.add_edge("jobmask_tool", END)
 graph_builder.add_edge("weather_tool", END)
 graph = graph_builder.compile()
 
-# Function to stream text incrementally
-def stream_text(container, text, delay=0.05):
-    """Stream text into a container character-by-character with a delay."""
-    current_text = ""
-    for char in text:
-        current_text += char
-        container.markdown(f"**Assistant:** {current_text}")
-        time.sleep(delay)
-
-# Function to start a new chat session
-def start_new_chat():
-    if not st.session_state.chat_created:
-        # First chat is always allowed
-        st.session_state.chat_created = True
-    elif st.session_state.current_session_id:
-        # For subsequent chats, require messages in the current session
-        current_session = st.session_state.chat_sessions.get(st.session_state.current_session_id, {})
-        if not current_session.get("messages"):
-            st.warning("Send a message to start this chat before opening a new one!")
-            return
-    
-    # Create new chat session
-    st.session_state.session_counter += 1
-    session_id = f"Chat {st.session_state.session_counter} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    st.session_state.chat_sessions[session_id] = {"messages": [], "title": "New Chat"}
-    st.session_state.current_session_id = session_id
-    st.rerun()
-
-# Streamlit App
-def main():
-    st.set_page_config(layout="wide")
-
-    # Initialize session state
+# ========== Streamlit Chat Interface ==========
+def initialize_session_state():
     if 'chat_sessions' not in st.session_state:
         st.session_state.chat_sessions = {}
     if 'current_session_id' not in st.session_state:
         st.session_state.current_session_id = None
     if 'session_counter' not in st.session_state:
         st.session_state.session_counter = 0
+    if 'show_welcome' not in st.session_state:
+        st.session_state.show_welcome = True
     if 'chat_created' not in st.session_state:
-        st.session_state.chat_created = False  # Tracks if any chat has been created
+        st.session_state.chat_created = False
 
-    # Custom CSS to fix chat input and style chat area
-    st.markdown("""
-        <style>
-        .stChatInput {
-            position: fixed;
-            bottom: 0;
-            left: 250px;
-            right: 0;
-            z-index: 1000;
-            background-color: white;
-            padding: 10px;
-            box-shadow: 0 -2px 5px rgba(0,0,0,0.1);
-        }
-        .chat-container {
-            padding-bottom: 80px;
-            max-height: calc(100vh - 150px);
-            overflow-y: auto;
-            padding: 10px 20px;
-        }
-        [data-testid="stSidebar"] {
-            width: 250px !important;
-            padding: 10px;
-            background-color: white;
-        }
-        </style>
-    """, unsafe_allow_html=True)
+def start_new_chat():
+    if not st.session_state.chat_created:
+        st.session_state.chat_created = True
+    elif st.session_state.current_session_id:
+        current_session = st.session_state.chat_sessions.get(st.session_state.current_session_id, {})
+        if not current_session.get("messages"):
+            st.warning("Please start a conversation before creating a new chat.")
+            return
 
-    # Sidebar for conversation history
+    st.session_state.session_counter += 1
+    session_id = f"Chat {st.session_state.session_counter} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    st.session_state.chat_sessions[session_id] = {
+        "messages": [],
+        "title": "New Chat",
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    st.session_state.current_session_id = session_id
+    st.session_state.show_welcome = False
+    st.rerun()
+
+def show_welcome_message():
+    st.session_state.current_session_id = None
+    st.session_state.show_welcome = True
+    st.rerun()
+
+def render_sidebar():
     with st.sidebar:
-        st.markdown("### Conversations")
-        if st.button("New Chat", key="new_chat"):
-            start_new_chat()
-        if st.session_state.chat_sessions:
-            for session_id in reversed(list(st.session_state.chat_sessions.keys())):
-                title = st.session_state.chat_sessions[session_id]["title"]
-                if st.button(title, key=session_id):
-                    st.session_state.current_session_id = session_id
-        else:
-            st.markdown("*No conversations yet.*")
+        col1, col2 = st.columns([0.8, 0.2])
+        with col1:
+            st.markdown("### Conversations")
+        with col2:
+            if st.button("ℹ️", help="Show Welcome Message", key="welcome_button"):
+                show_welcome_message()
 
-    # Main content area
-    if st.session_state.current_session_id is None:
-        # Welcome screen
-        st.title("💬 Chatbot with Jobmask & Weather")
-        st.write("This chatbot supports casual conversation, basic arithmetic, Jobmask API, and Weather API requests. Click 'New Chat' to start!")
-        st.image("https://via.placeholder.com/300x150.png?text=Chatbot+Welcome", caption="Welcome to the Chatbot")
+        if st.button("➕ New Chat", key="new_chat_button"):
+            start_new_chat()
+
+        if st.session_state.chat_sessions:
+            sorted_sessions = sorted(
+                st.session_state.chat_sessions.items(),
+                key=lambda x: x[1]["created_at"],
+                reverse=True
+            )
+            for session_id, session_data in sorted_sessions:
+                if st.button(
+                    session_data["title"],
+                    key=f"btn_{session_id}",
+                    help=f"Created at {session_data['created_at']}"
+                ):
+                    st.session_state.current_session_id = session_id
+                    st.session_state.show_welcome = False
+                    st.rerun()
+
+def process_user_input(user_input):
+    if not st.session_state.current_session_id:
+        return
+
+    session = st.session_state.chat_sessions[st.session_state.current_session_id]
+    session["messages"].append(HumanMessage(content=user_input))
+
+    if session["title"] == "New Chat":
+        session["title"] = user_input[:30] + ("..." if len(user_input) > 30 else "")
+
+    state = {"messages": session["messages"]}
+    with st.spinner("Thinking..."):
+        time.sleep(1)  # Simulate processing time for better UX
+        result = graph.invoke(state)
+    session["messages"] = result["messages"]
+    st.rerun()
+
+def display_welcome():
+    st.title("💬 Advanced Chatbot")
+    st.write("""
+    Welcome to your AI assistant! This chatbot can:
+    - Have natural conversations
+    - Perform calculations
+    - Query Jobmask data
+    - Fetch weather information
+    """)
+    st.image("https://cdn-icons-png.flaticon.com/512/4712/4712035.png",
+             caption="AI Assistant", width=200)
+
+def display_chat():
+    st.title("💬 Current Chat")
+
+    if st.session_state.current_session_id not in st.session_state.chat_sessions:
+        st.warning("Session not found. Starting a new chat.")
+        start_new_chat()
+        return
+
+    session = st.session_state.chat_sessions[st.session_state.current_session_id]
+
+    for msg in session["messages"]:
+        if isinstance(msg, HumanMessage):
+            with st.chat_message("user"):
+                st.markdown(msg.content)
+        elif isinstance(msg, AIMessage):
+            with st.chat_message("assistant"):
+                try:
+                    content = json.loads(msg.content).get("Message", msg.content)
+                    if isinstance(content, dict):
+                        if "error" in content:
+                            st.error(content["error"])
+                        elif "result" in content:
+                            st.json(content["result"])
+                        elif "action" in content:
+                            st.info(f"Executing {content['tool']} action...")
+                    else:
+                        st.markdown(content)
+                except json.JSONDecodeError:
+                    st.markdown(msg.content)
+
+    if prompt := st.chat_input("Type your message here...", key=f"input_{st.session_state.current_session_id}"):
+        process_user_input(prompt)
+
+def main():
+    st.set_page_config(page_title="Advanced Chatbot", page_icon="💬")
+    initialize_session_state()
+    render_sidebar()
+
+    if st.session_state.show_welcome or not st.session_state.current_session_id:
+        display_welcome()
     else:
-        # Chat interface
-        st.title("💬 Chatbot with Jobmask & Weather")
+        display_chat()
+
+if __name__ == "__main__":
+    main()
+-------------------------------------------------------------------------------------------------------
+- Cache implementation, Chat history (Strict Empty Chat Prevention), welcome message (Sidebar Welcome Button),  (DEEPSEEK)
+class CustomLLM(LLM):
+    model_name: str = "custom_model"
+    api_endpoint: str = "http://your-api-host/chat/invoke"
+    
+    def __init__(self, api_endpoint: Optional[str] = None):
+        super().__init__()
+        if api_endpoint:
+            self.api_endpoint = api_endpoint
+    
+    def _call(self, prompt: str, stop: Optional[List[str]] = None, **kwargs: Any) -> str:
+        payload = {"Questions": prompt}
+        try:
+            response = requests.post(self.api_endpoint, json=payload)
+            response.raise_for_status()
+            api_response = response.json()
+            return json.dumps({"Message": api_response.get("Message", "Error: 'Message' key missing")})
+        except requests.exceptions.RequestException as e:
+            return json.dumps({"Message": f"Failed to call /chat/invoke: {str(e)}"})
+    
+    @property
+    def _llm_type(self) -> str:
+        return "custom_llm"
+    
+    @property
+    def _identifying_params(self) -> Dict[str, Any]:
+        return {"model_name": self.model_name, "api_endpoint": self.api_endpoint}
+
+custom_llm = CustomLLM(api_endpoint="http://your-api-host/chat/invoke")
+
+def llm_node(state: MessageState) -> MessageState:
+    last_message = state["messages"][-1]
+    if isinstance(last_message, HumanMessage) or isinstance(last_message, AIMessage):
+        history = state["messages"][:-1]
+        history_str = "\n".join([msg.content for msg in history])
         
-        # Get current session
-        current_session = st.session_state.chat_sessions[st.session_state.current_session_id]
-        messages = current_session["messages"]
+        input_content = last_message.content if isinstance(last_message, HumanMessage) else json.loads(last_message.content).get("Message", "")
+        formatted_prompt = multi_tool_prompt_template.format(history=history_str, input=input_content)
         
-        # Scrollable chat container
-        with st.container():
-            st.markdown('<div class="chat-container">', unsafe_allow_html=True)
-            for msg in messages:
-                if isinstance(msg, HumanMessage):
-                    with st.chat_message("user"):
-                        st.markdown(f"**You:** {msg.content}")
-                elif isinstance(msg, AIMessage):
-                    with st.chat_message("assistant"):
-                        content = json.loads(msg.content).get("Message", msg.content)
-                        if isinstance(content, dict) and "action" in content:
-                            st.json(content)
-                        elif isinstance(content, dict) and "result" in content:
-                            st.json(content)
-                        elif isinstance(content, dict) and "error" in content:
-                            st.markdown(f"**Assistant:** {content['message']}")
-                        else:
-                            st.markdown(f"**Assistant:** {content}")
-            st.markdown('</div>', unsafe_allow_html=True)
+        response = custom_llm(formatted_prompt)
+        state["messages"].append(AIMessage(content=response))
+    return state
+
+def jobmask_tool(query_params: Dict[str, str]) -> str:
+    if "page_size" not in query_params:
+        query_params["page_size"] = "10"
+    
+    try:
+        api_url = "https://api.jobmask.com/search"
+        response = requests.get(api_url, params=query_params)
+        response.raise_for_status()
+        data = response.json()
+        return json.dumps({"result": data})
+    except requests.exceptions.RequestException as e:
+        return json.dumps({"error": f"Jobmask API call failed: {str(e)}"})
+
+def weather_tool(query_params: Dict[str, str]) -> str:
+    try:
+        api_url = "https://api.openweathermap.org/data/2.5/weather"
+        response = requests.get(api_url, params=query_params)
+        response.raise_for_status()
+        data = response.json()
+        return json.dumps({"result": data})
+    except requests.exceptions.RequestException as e:
+        return json.dumps({"error": f"Weather API call failed: {str(e)}"})
+
+def check_cache(state: MessageState) -> Optional[Dict[str, Any]]:
+    last_message = json.loads(state["messages"][-1].content)
+    message_content = last_message["Message"]
+    inner_content = json.loads(message_content) if isinstance(message_content, str) else message_content
+    
+    if inner_content.get("action") == "call_tool" and inner_content.get("tool") == "jobmask":
+        current_query_params = inner_content["query_params"]
+        if "page_size" not in current_query_params:
+            current_query_params["page_size"] = "10"
         
-        # Chat input
-        user_input = st.chat_input("Type your message here...", key=f"input_{st.session_state.current_session_id}")
-        if user_input:
-            # Update session title based on first message
-            if current_session["title"] == "New Chat":
-                current_session["title"] = user_input[:30] + ("..." if len(user_input) > 30 else "")
-            
-            # Append user message
-            messages.append(HumanMessage(content=user_input))
-            
-            # Run the graph
-            with st.spinner("Processing..."):
-                state = {"messages": messages}
-                result = graph.invoke(state)
-                messages = result["messages"]
-            
-            # Update session state
-            st.session_state.chat_sessions[st.session_state.current_session_id]["messages"] = messages
-            st.session_state.chat_sessions[st.session_state.current_session_id]["title"] = current_session["title"]
-            
-            # Display new messages
-            new_messages = messages[-2 if len(messages) > 1 and "action" in json.loads(messages[-2].content).get("Message", {}) else -1:]
-            with st.container():
-                st.markdown('<div class="chat-container">', unsafe_allow_html=True)
-                for msg in new_messages:
-                    if isinstance(msg, AIMessage):
-                        with st.chat_message("assistant"):
-                            content = json.loads(msg.content).get("Message", msg.content)
-                            if isinstance(content, dict) and "action" in content:
-                                st.json(content)
-                            elif isinstance(content, dict) and "result" in content:
-                                st.json(content)
-                            elif isinstance(content, dict) and "error" in content:
-                                stream_text(st.empty(), content["message"])
-                            else:
-                                stream_text(st.empty(), content)
-                st.markdown('</div>', unsafe_allow_html=True)
-            
-            # Rerun to update UI
-            st.rerun()
+        for i in range(len(state["messages"]) - 2, -1, -1):
+            msg = state["messages"][i]
+            if isinstance(msg, AIMessage):
+                try:
+                    prev_content = json.loads(msg.content)["Message"]
+                    if isinstance(prev_content, dict) and "result" in prev_content:
+                        if i > 0 and isinstance(state["messages"][i-1], AIMessage):
+                            tool_call = json.loads(state["messages"][i-1].content)["Message"]
+                            if (tool_call.get("action") == "call_tool" and 
+                                tool_call.get("tool") == "jobmask" and 
+                                tool_call["query_params"] == current_query_params):
+                                return prev_content
+                except (json.JSONDecodeError, KeyError):
+                    continue
+    return None
+
+def jobmask_tool_node(state: MessageState) -> MessageState:
+    cached_result = check_cache(state)
+    if cached_result:
+        state["messages"].append(AIMessage(content=json.dumps({"Message": cached_result})))
+    else:
+        last_message = json.loads(state["messages"][-1].content)
+        message_content = last_message["Message"]
+        inner_content = json.loads(message_content) if isinstance(message_content, str) else message_content
+        if inner_content.get("action") == "call_tool" and inner_content.get("tool") == "jobmask":
+            query_params = inner_content["query_params"]
+            result = jobmask_tool(query_params)
+            state["messages"].append(AIMessage(content=result))
+    return state
+
+def weather_tool_node(state: MessageState) -> MessageState:
+    last_message = json.loads(state["messages"][-1].content)
+    message_content = last_message["Message"]
+    inner_content = json.loads(message_content) if isinstance(message_content, str) else message_content
+    if inner_content.get("action") == "call_tool" and inner_content.get("tool") == "weather":
+        query_params = inner_content["query_params"]
+        result = weather_tool(query_params)
+        state["messages"].append(AIMessage(content=result))
+    return state
+
+def router_function(state: MessageState) -> str:
+    last_message = json.loads(state["messages"][-1].content)
+    message_content = last_message["Message"]
+    
+    try:
+        inner_content = json.loads(message_content) if isinstance(message_content, str) else message_content
+        if inner_content.get("action") == "call_tool":
+            tool_name = inner_content.get("tool")
+            if tool_name == "jobmask":
+                return "jobmask_tool"
+            elif tool_name == "weather":
+                return "weather_tool"
+    except json.JSONDecodeError:
+        pass
+    
+    return END
+
+graph_builder = StateGraph(MessageState)
+graph_builder.add_node("llm", llm_node)
+graph_builder.add_node("jobmask_tool", jobmask_tool_node)
+graph_builder.add_node("weather_tool", weather_tool_node)
+graph_builder.set_entry_point("llm")
+graph_builder.add_conditional_edges("llm", router_function)
+graph_builder.add_edge("jobmask_tool", END)
+graph_builder.add_edge("weather_tool", END)
+graph = graph_builder.compile()
+
+# ========== Streamlit Chat Interface ==========
+def initialize_session_state():
+    if 'chat_sessions' not in st.session_state:
+        st.session_state.chat_sessions = {}
+    if 'current_session_id' not in st.session_state:
+        st.session_state.current_session_id = None
+    if 'session_counter' not in st.session_state:
+        st.session_state.session_counter = 0
+    if 'show_welcome' not in st.session_state:
+        st.session_state.show_welcome = True
+    if 'new_chat_clicked' not in st.session_state:
+        st.session_state.new_chat_clicked = False
+    if 'sidebar_collapsed' not in st.session_state:
+        st.session_state.sidebar_collapsed = False
+
+def start_new_chat():
+    # Check if current chat exists and is empty
+    current_session = st.session_state.current_session_id
+    if (current_session and 
+        current_session in st.session_state.chat_sessions and
+        len(st.session_state.chat_sessions[current_session]["messages"]) == 0):
+        st.warning("Please start a conversation in the current chat before creating a new one.")
+        return
+    
+    st.session_state.session_counter += 1
+    session_id = f"session_{st.session_state.session_counter}"
+    st.session_state.chat_sessions[session_id] = {
+        "messages": [],
+        "title": f"New Chat {st.session_state.session_counter}",
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    st.session_state.current_session_id = session_id
+    st.session_state.show_welcome = False
+    st.session_state.new_chat_clicked = True
+    st.rerun()
+
+def display_welcome():
+    st.title("💬 Advanced Chatbot")
+    st.write("""
+    Welcome to your AI assistant! This chatbot can:
+    - Have natural conversations
+    - Perform calculations
+    - Query Jobmask data
+    - Fetch weather information
+    """)
+    st.image("https://cdn-icons-png.flaticon.com/512/4712/4712035.png",
+             caption="AI Assistant", width=200)
+    
+    if st.button("Start New Chat"):
+        start_new_chat()
+
+def render_sidebar():
+    with st.sidebar:
+        # Sidebar header with clickable welcome button
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.subheader("Chat Sessions")
+        with col2:
+            if st.button("ℹ️", help="Show Welcome Message"):
+                st.session_state.show_welcome = True
+                st.session_state.current_session_id = None
+                st.rerun()
+        
+        # New Chat button
+        if st.button("➕ New Chat", use_container_width=True):
+            start_new_chat()
+        
+        # Chat history list
+        if not st.session_state.chat_sessions:
+            st.write("No chat history yet")
+        else:
+            for session_id in sorted(st.session_state.chat_sessions.keys(), reverse=True):
+                session = st.session_state.chat_sessions[session_id]
+                btn_label = f"{session['title']} ({session_id})"
+                if st.button(btn_label, key=session_id, use_container_width=True):
+                    st.session_state.current_session_id = session_id
+                    st.session_state.show_welcome = False
+                    st.session_state.new_chat_clicked = False
+                    st.rerun()
+
+def process_user_input(user_input):
+    if not st.session_state.current_session_id:
+        return
+    
+    st.session_state.new_chat_clicked = False
+    
+    session = st.session_state.chat_sessions[st.session_state.current_session_id]
+    session["messages"].append(HumanMessage(content=user_input))
+    
+    if session["title"].startswith("New Chat"):
+        session["title"] = user_input[:30] + ("..." if len(user_input) > 30 else "")
+    
+    state = {"messages": session["messages"]}
+    result = graph.invoke(state)
+    session["messages"] = result["messages"]
+    st.rerun()
+
+def display_chat():
+    if st.session_state.current_session_id not in st.session_state.chat_sessions:
+        st.warning("Session not found. Starting a new chat.")
+        start_new_chat()
+        return
+    
+    session = st.session_state.chat_sessions[st.session_state.current_session_id]
+    
+    # Display all messages
+    for msg in session["messages"]:
+        if isinstance(msg, HumanMessage):
+            with st.chat_message("user"):
+                st.markdown(msg.content)
+        elif isinstance(msg, AIMessage):
+            with st.chat_message("assistant"):
+                try:
+                    content = json.loads(msg.content).get("Message", msg.content)
+                    if isinstance(content, dict):
+                        if "error" in content:
+                            st.error(content["message"])
+                        elif "result" in content:
+                            st.json(content["result"])
+                        elif "action" in content:
+                            st.info(f"Executing {content['tool']} action...")
+                    else:
+                        st.markdown(content)
+                except json.JSONDecodeError:
+                    st.markdown(msg.content)
+    
+    # Input box
+    if prompt := st.chat_input("Type your message here..."):
+        process_user_input(prompt)
+
+def main():
+    st.set_page_config(
+        page_title="Advanced Chatbot", 
+        page_icon="💬",
+        layout="wide"
+    )
+    initialize_session_state()
+    
+    render_sidebar()
+    
+    if st.session_state.show_welcome or not st.session_state.current_session_id:
+        display_welcome()
+    else:
+        display_chat()
 
 if __name__ == "__main__":
     main()
