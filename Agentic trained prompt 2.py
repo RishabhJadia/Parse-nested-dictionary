@@ -1466,6 +1466,72 @@ if __name__ == "__main__":
     main()
 --------------------------------------------------------------------------------------------------------
 - Cache implementation, Chat history (Strict Empty Chat Prevention), welcome message (Sidebar Welcome Button),  (DEEPSEEK)
+import streamlit as st
+from langchain_core.language_models.llms import LLM
+from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.prompts import PromptTemplate
+from langgraph.graph import StateGraph, END, MessageState
+from typing import Optional, List, Dict, Any
+import requests
+import json
+import time
+from datetime import datetime
+
+# Updated PromptTemplate (unchanged)
+multi_tool_prompt_template = PromptTemplate(
+    input_variables=["history", "input"],
+    template="""
+You are an assistant that can handle casual conversation, basic arithmetic, Jobmask API requests, and Weather API requests.
+
+1. **Casual Conversation**: For greetings, questions, or general inquiries (e.g., "Hi, how are you?", "What is Autosys?", "What is my name"), respond with a plain text friendly and informative reply. Use conversation history to answer questions about prior inputs (e.g., names provided earlier). For example, if the user says "my name is <name>", store and recall it later.
+
+2. **Basic Arithmetic**: If the input contains "add", "sum", "plus", or similar terms followed by two numbers (e.g., "add 5 and 3"), compute the result and return it as plain text (e.g., "The sum of 5 and 3 is 8"). If numbers are missing, return: {"error": "missing_numbers", "message": "Please provide two numbers to add (e.g., 'add 5 and 3')."}
+
+3. **Jobmask API**: Requires:
+   - Required: environment (string), product (string)
+   - Optional: seal (string), name (string), page_size (string)
+   - Trigger Rule: Any phrase where a verb synonymous with querying or retrieving (e.g., "get", "fetch", "retrieve", "obtain", "query", "pull", "grab", "extract", "collect") is followed by "jobmask" (e.g., "get jobmask", "fetch jobmask", "retrieve jobmask", "query jobmask") indicates a Jobmask API request. The presence of "jobmask" after such aНК verb is the key indicator, regardless of additional words (e.g., "get all the jobmask" or "fetch the jobmask data" still triggers it).
+   - Parameter Identification Rules:
+     - **Seal**: If a number between 3 and 6 digits (e.g., 100 to 999999) appears in the input (with or without the keyword "seal"), treat it as the 'seal' parameter.
+     - **Environment**: If a value matches "prod", "dev", "uat", "test", "qa", or "cat" (with or without the keyword "environment"), treat it as the 'environment' parameter. Look for phrases like "of <value>", "in <value>", "for <value>", "from <value>", "in the <value> environment", or standalone mentions. Ignore surrounding words like "the" or quotes around the value.
+     - **Product**: 
+       - Valid products are strictly "autosys" or "controlm".
+       - If a value matches "autosys" or "controlm" exactly (with or without the keyword "product"), treat it as the 'product' parameter. Look for phrases like "of <value>", "for <value>", "for the product <value>", or standalone mentions. Ignore quotes around the value (e.g., "'autosys'" is "autosys").
+       - **Misspelling Handling**: Before any other checks, if a product-like term doesn’t match "autosys" or "controlm" exactly but closely resembles them (e.g., "autosis", "autosyss", "autoys", "autossiss", "contrl", "controllm"), silently map it to the closest match:
+         - Terms resembling "autosys" (e.g., "autosis", "autosyss", "autoys", "autossiss") → "autosys"
+         - Terms resembling "controlm" (e.g., "control", "controllm", "contrlm") → "controlm"
+         - Use the corrected value as the 'product' for all subsequent steps without announcing the correction.
+       - **Invalid Product**: If the product-like term doesn’t match or closely resemble "autosys" or "controlm" (e.g., "randomproduct", "xyz"), return: "I have information related to autosys and controlm only."
+     - **Page Size**: If a number is 1 or 2 digits (e.g., 0 to 99) and appears in the input (with or without the keyword "page_size"), treat it as the 'page_size' parameter.
+     - For ambiguous terms like "mapped to <value>", assume the value is the 'seal' if it fits the 3-6 digit rule.
+     - **Contextual Continuation**: If the current input provides some Jobmask parameters (e.g., environment, product) but lacks others (e.g., seal), check the last 3 messages in the conversation history for missing parameters related to a Jobmask request (e.g., "get jobmask", "fetch jobmask", "query jobmask"). Combine them to form a complete query if possible.
+     - **Execution Rule**: If both required parameters ('environment' and 'product') are present (after silent misspelling correction), proceed with the Jobmask API call by returning the tool call JSON. Do not ask for 'seal' as it is optional, and do not comment on corrections or processing steps—just return the tool call JSON.
+   - If required parameters are missing in the current input and cannot be found in recent history:
+     - If neither 'environment' nor 'product' is provided (regardless of whether optional parameters like 'seal' are present), return: {"error": "missing_parameters", "message": "Please provide correct input with environment and product, e.g., 'get jobmask for 88154 in prod for autosys'."}
+     - If only 'environment' is missing (and 'product' is present after correction), return: {"error": "missing_parameters", "message": "Please specify the 'environment' (e.g., prod, dev, uat, test, qa, cat) for the Jobmask request."}
+     - If only 'product' is missing (and 'environment' is present), return: {"error": "missing_parameters", "message": "Please specify the 'product' (e.g., autosys, controlm) for the Jobmask request."}
+     - Return: {"action": "call_tool", "tool": "jobmask", "query_params": {...}, "context": "Fetching job listings"}
+
+4. **Weather API**: Requires:
+   - Required: location (string)
+   - Optional: units (string, either "metric" or "imperial")
+   - Parameter Identification Rules:
+     - **Location**: If a word or phrase in the input matches a known city name (e.g., "London", "New York", "Tokyo") or is preceded by "in", "at", or "for" (e.g., "weather in London"), treat it as the 'location' parameter. If ambiguous, assume the last non-numeric, non-matching word/phrase is the location.
+     - **Units**: If "metric" or "imperial" appears in the input (with or without the keyword "units"), treat it as the 'units' parameter. If not specified, do not include it in the query.
+     - Trigger words like "weather", "temperature", or "forecast" indicate a Weather API request.
+     - Return: {"action": "call_tool", "tool": "weather", "query_params": {...}, "context": "Fetching weather information"}
+   - If required parameters are missing in the current input:
+     - If 'location' is missing, return: {"error": "missing_parameters", "message": "Please specify the 'location' (e.g., London, New York) for the Weather request."}
+
+Conversation history:
+{history}
+
+User input:
+{input}
+
+Return your response as either plain text (for casual input or invalid product) or a JSON object (for tool requests or errors). Do not include explanatory text about corrections or processing unless explicitly asked by the user. If the input resembles a Jobmask request but isn’t parsed correctly, return: {"error": "parsing_error", "message": "I understood this as a Jobmask request, but couldn’t parse it correctly. Try 'get jobmask for autosys in prod'."} The response will be wrapped in {"Message": <your_response>} by the system.
+"""
+)
 class CustomLLM(LLM):
     model_name: str = "custom_model"
     api_endpoint: str = "http://your-api-host/chat/invoke"
