@@ -1145,7 +1145,7 @@ You are an assistant that can handle casual conversation, basic arithmetic, Jobm
    - If required parameters are missing in the current input:
      - If 'location' is missing, return: {"error": "missing_parameters", "message": "Please specify the 'location' (e.g., London, New York) for the Weather request."}
 
-Conversation history:
+Conversation W history:
 {history}
 
 User input:
@@ -1346,7 +1346,7 @@ def show_welcome_message():
     st.session_state.show_welcome = True  # Show welcome message
     st.rerun()  # Refresh the app
 
-# Render sidebar for conversation history
+# Sidebar for conversation history
 def render_sidebar():
     with st.sidebar:
         # Header section
@@ -1385,52 +1385,45 @@ def process_user_input(user_input):
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')  # Get current timestamp
         session["title"] = f"{user_input[:30]}{'...' if len(user_input) > 30 else ''} - {timestamp}"  # Set title as <input> - <timestamp>
 
+    # Process the input through the LangChain graph
     state = {"messages": session["messages"]}  # Prepare state for graph
     with st.spinner("Thinking..."):
         time.sleep(1)  # Simulate processing delay for better UX
         result = graph.invoke(state)  # Invoke LangChain graph
-    session["messages"] = result["messages"]  # Update session messages
-    st.session_state.chat_sessions[st.session_state.current_session_id]["messages"] = session["messages"]  # Update session state
+        session["messages"] = result["messages"]  # Update session messages with graph output
+
+    # Update session state
+    st.session_state.chat_sessions[st.session_state.current_session_id]["messages"] = session["messages"]  # Update messages
     st.session_state.chat_sessions[st.session_state.current_session_id]["title"] = session["title"]  # Update title
     st.rerun()  # Refresh the app
 
 # Display welcome screen
 def display_welcome():
     st.title("💬 Advanced Chatbot")  # App title
-    st.write("""
-    Welcome to your AI assistant! This chatbot can:
-    - Have natural conversations
-    - Perform calculations
-    - Query Jobmask data
-    - Fetch weather information
-    """)  # Welcome message
+    st.write(
+        "This is an advanced chatbot built with Streamlit and LangChain. Click 'New Chat' to start a conversation!")  # Welcome message
     st.image("https://cdn-icons-png.flaticon.com/512/4712/4712035.png",
-             caption="AI Assistant", width=200)  # Display icon
+             caption="AI Assistant", width=200)  # Placeholder image
 
 # Display chat interface
 def display_chat():
     st.title("💬 Advanced Chatbot")  # App title
 
-    # Verify session exists
-    if st.session_state.current_session_id not in st.session_state.chat_sessions:
-        st.warning("Session not found. Starting a new chat.")  # Warn if session is missing
-        start_new_chat()
-        return
-
-    session = st.session_state.chat_sessions[st.session_state.current_session_id]  # Get current session
+    # Get current session data
+    current_session = st.session_state.chat_sessions[st.session_state.current_session_id]  # Retrieve current session
+    messages = current_session["messages"]  # Retrieve session messages
 
     # Display chat messages
-    for msg in session["messages"]:
+    for msg in messages:
         if isinstance(msg, HumanMessage):
-            with st.chat_message("user"):
-                st.markdown(msg.content)  # Display user message
+            st.chat_message("user").write(msg.content)  # Show user message content without timestamp
         elif isinstance(msg, AIMessage):
             with st.chat_message("assistant"):
                 try:
                     content = json.loads(msg.content).get("Message", msg.content)  # Parse AI message
                     if isinstance(content, dict):
                         if "error" in content:
-                            st.error(content.get("message", content["error"]))  # Display error
+                            st.error(content.get("message", content["error"]))  # Display error message
                         elif "result" in content:
                             st.json(content["result"])  # Display JSON result
                         elif "action" in content:
@@ -1438,28 +1431,59 @@ def display_chat():
                         else:
                             st.markdown(json.dumps(content))  # Display raw JSON
                     else:
-                        st.markdown(content)  # Display plain text
+                        st.write(content)  # Display plain text response
                 except json.JSONDecodeError:
-                    st.markdown(msg.content)  # Fallback for unparsable content
+                    st.write(msg.content)  # Fallback for unparsable content
 
     # Chat input field
-    if prompt := st.chat_input(
+    user_input = st.chat_input(
         "Type your message here...",
         key=f"input_{st.session_state.current_session_id}"  # Unique key for input
-    ):
-        process_user_input(prompt)  # Process user input
+    )
+    if user_input:
+        process_user_input(user_input)  # Process user input
 
 # Main function to run the app
 def main():
     st.set_page_config(page_title="Advanced Chatbot", page_icon="💬")  # Configure page
     initialize_session_state()  # Initialize session state
-    render_sidebar()  # Render sidebar
 
-    # Display appropriate interface
-    if st.session_state.show_welcome or not st.session_state.current_session_id:
-        display_welcome()  # Show welcome screen
+    # Sidebar for conversation history
+    with st.sidebar:
+        # Header section
+        col1, col2 = st.columns([0.8, 0.2])  # Split columns for title and button
+        with col1:
+            st.markdown("### Conversations")  # Display history title
+        with col2:
+            # Button to show welcome message
+            if st.button("ℹ️", help="Show Welcome Message", key="welcome_button"):
+                show_welcome_message()
+
+        # Button to create a new chat
+        if st.button("New Chat", key="new_chat"):
+            start_new_chat()
+
+        # Display chat history buttons
+        if st.session_state.chat_sessions:
+            for session_id in reversed(list(st.session_state.chat_sessions.keys())):  # Reverse to show newest first
+                title = st.session_state.chat_sessions[session_id]["title"]  # Get session title
+                if st.button(title, key=session_id):  # Create button for session
+                    st.session_state.current_session_id = session_id  # Set as current session
+                    st.session_state.show_welcome = False  # Hide welcome message
+        else:
+            st.markdown("*No conversations yet.*")  # Show if no sessions exist
+
+    # Main content area
+    if st.session_state.show_welcome or st.session_state.current_session_id is None:
+        # Display welcome screen
+        st.title("💬 Advanced Chatbot")  # App title
+        st.write(
+            "This is an advanced chatbot built with Streamlit and LangChain. Click 'New Chat' to start a conversation!")  # Welcome message
+        st.image("https://cdn-icons-png.flaticon.com/512/4712/4712035.png",
+                 caption="AI Assistant", width=200)  # Placeholder image
     else:
-        display_chat()  # Show chat interface
+        # Display chat interface
+        display_chat()
 
 # Entry point
 if __name__ == "__main__":
