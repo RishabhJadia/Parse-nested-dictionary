@@ -2329,35 +2329,37 @@ Return your response as either plain text (for casual input or invalid product) 
 )
 
 # Custom LLM class for API interaction
-def create_custom_llm(api_endpoint: str = "http://your-api-host/chat/invoke") -> LLM:
-    class CustomLLM(LLM):
-        model_name: str = "custom_model"
-        api_endpoint: str = api_endpoint
-        
-        def __init__(self):
-            super().__init__()
-        
-        def _call(self, prompt: str, stop: Optional[List[str]] = None, **kwargs: Any) -> str:
-            payload = {"Questions": prompt}
-            try:
-                response = requests.post(self.api_endpoint, json=payload)
-                response.raise_for_status()
-                api_response = response.json()
-                return json.dumps({"Message": api_response.get("Mesaage", "Error: 'Mesaage' key missing")})
-            except requests.exceptions.RequestException as e:
-                return json.dumps({"Message": f"Failed to call /chat/invoke: {str(e)}"})
-        
-        @property
-        def _llm_type(self) -> str:
-            return "custom_llm"
-        
-        @property
-        def _identifying_params(self) -> Dict[str, Any]:
-            return {"model_name": self.model_name, "api_endpoint": self.api_endpoint}
+class CustomLLM(LLM):
+    model_name: str = "custom_model"
+    api_endpoint: str = "http://your-api-host/chat/invoke"
     
-    return CustomLLM()
+    def __init__(self, api_endpoint: Optional[str] = None):
+        super().__init__()
+        if api_endpoint:
+            self.api_endpoint = api_endpoint
+    
+    def _call(self, prompt: str, stop: Optional[List[str]] = None, **kwargs: Any) -> str:
+        payload = {"Questions": prompt}
+        try:
+            response = requests.post(self.api_endpoint, json=payload)
+            response.raise_for_status()
+            api_response = response.json()
+            return json.dumps({"Message": api_response.get("Mesaage", "Error: 'Mesaage' key missing")})
+        except requests.exceptions.RequestException as e:
+            return json.dumps({"Message": f"Failed to call /chat/invoke: {str(e)}"})
+    
+    @property
+    def _llm_type(self) -> str:
+        return "custom_llm"
+    
+    @property
+    def _identifying_params(self) -> Dict[str, Any]:
+        return {"model_name": self.model_name, "api_endpoint": self.api_endpoint}
 
-# Define LLM node
+# Instantiate custom LLM
+custom_llm = CustomLLM(api_endpoint="http://your-api-host/chat/invoke")
+
+# Define LLM node for processing user input
 def llm_node(state: MessageState) -> MessageState:
     last_message = state["messages"][-1]
     if isinstance(last_message, (HumanMessage, AIMessage)):
@@ -2365,12 +2367,11 @@ def llm_node(state: MessageState) -> MessageState:
         history_str = "\n".join([msg.content for msg in history])
         input_content = last_message.content if isinstance(last_message, HumanMessage) else json.loads(last_message.content).get("Message", "")
         formatted_prompt = multi_tool_prompt_template.format(history=history_str, input=input_content)
-        custom_llm = create_custom_llm()
         response = custom_llm(formatted_prompt)
         state["messages"].append(AIMessage(content=response))
     return state
 
-# Define Jobmask tool
+# Define Jobmask tool for API calls
 def jobmask_tool(query_params: Dict[str, str]) -> str:
     if "page_size" not in query_params:
         query_params["page_size"] = "10"
@@ -2383,7 +2384,7 @@ def jobmask_tool(query_params: Dict[str, str]) -> str:
     except requests.exceptions.RequestException as e:
         return json.dumps({"error": f"Jobmask API call failed: {str(e)}"})
 
-# Define Weather tool
+# Define Weather tool for API calls
 def weather_tool(query_params: Dict[str, str]) -> str:
     try:
         api_url = "https://api.openweathermap.org/data/2.5/weather"
@@ -2394,7 +2395,7 @@ def weather_tool(query_params: Dict[str, str]) -> str:
     except requests.exceptions.RequestException as e:
         return json.dumps({"error": f"Weather API call failed: {str(e)}"})
 
-# Check cache for Jobmask results
+# Check cache for previous Jobmask results
 def check_cache(state: MessageState) -> Optional[Dict[str, Any]]:
     last_message = json.loads(state["messages"][-1].content)
     message_content = last_message["Message"]
@@ -2421,7 +2422,7 @@ def check_cache(state: MessageState) -> Optional[Dict[str, Any]]:
                     continue
     return None
 
-# Define tool nodes
+# Define Jobmask tool node
 def jobmask_tool_node(state: MessageState) -> MessageState:
     cached_result = check_cache(state)
     if cached_result:
@@ -2436,6 +2437,7 @@ def jobmask_tool_node(state: MessageState) -> MessageState:
             state["messages"].append(AIMessage(content=result))
     return state
 
+# Define Weather tool node
 def weather_tool_node(state: MessageState) -> MessageState:
     last_message = json.loads(state["messages"][-1].content)
     message_content = last_message["Message"]
@@ -2446,7 +2448,7 @@ def weather_tool_node(state: MessageState) -> MessageState:
         state["messages"].append(AIMessage(content=result))
     return state
 
-# Router function
+# Router function to direct flow
 def router_function(state: MessageState) -> str:
     last_message = json.loads(state["messages"][-1].content)
     message_content = last_message["Message"]
@@ -2462,22 +2464,18 @@ def router_function(state: MessageState) -> str:
         pass
     return END
 
-# Setup LangChain graph
-def setup_graph():
-    graph_builder = StateGraph(MessageState)
-    graph_builder.add_node("llm", llm_node)
-    graph_builder.add_node("jobmask_tool", jobmask_tool_node)
-    graph_builder.add_node("weather_tool", weather_tool_node)
-    graph_builder.set_entry_point("llm")
-    graph_builder.add_conditional_edges("llm", router_function)
-    graph_builder.add_edge("jobmask_tool", END)
-    graph_builder.add_edge("weather_tool", END)
-    return graph_builder.compile()
-
-# Initialize session state
+# Initialize session state variables
 def initialize_session_state():
     if 'graph' not in st.session_state:
-        st.session_state.graph = setup_graph()
+        graph_builder = StateGraph(MessageState)
+        graph_builder.add_node("llm", llm_node)
+        graph_builder.add_node("jobmask_tool", jobmask_tool_node)
+        graph_builder.add_node("weather_tool", weather_tool_node)
+        graph_builder.set_entry_point("llm")
+        graph_builder.add_conditional_edges("llm", router_function)
+        graph_builder.add_edge("jobmask_tool", END)
+        graph_builder.add_edge("weather_tool", END)
+        st.session_state.graph = graph_builder.compile()
     if 'chat_histories' not in st.session_state:
         st.session_state.chat_histories = {}
     if 'current_history_session_id' not in st.session_state:
@@ -2491,7 +2489,7 @@ def initialize_session_state():
     if 'last_processed_index' not in st.session_state:
         st.session_state.last_processed_index = {}
 
-# Start a new chat session
+# Function to start a new chat session
 def start_new_chat():
     if not st.session_state.chat_created:
         st.session_state.chat_created = True
@@ -2509,13 +2507,13 @@ def start_new_chat():
     st.session_state.show_welcome = False
     st.rerun()
 
-# Show welcome message
+# Function to display the welcome message
 def show_welcome_message():
     st.session_state.current_history_session_id = None
     st.session_state.show_welcome = True
     st.rerun()
 
-# Render sidebar
+# Sidebar for conversation history
 def render_sidebar():
     with st.sidebar:
         col1, col2 = st.columns([0.8, 0.2])
@@ -2554,17 +2552,6 @@ def parse_ai_message(msg: AIMessage) -> str:
     except json.JSONDecodeError:
         return format_output(msg.content)
 
-# Render previous messages statically
-def render_previous_messages(messages: List, last_processed_index: int):
-    for i in range(last_processed_index + 1):
-        if i < len(messages):
-            msg = messages[i]
-            if isinstance(msg, HumanMessage):
-                st.chat_message("user").markdown(msg.content)
-            elif isinstance(msg, AIMessage):
-                with st.chat_message("assistant"):
-                    st.markdown(parse_ai_message(msg))
-
 # Stream assistant response
 def stream_assistant_response(msg: AIMessage):
     with st.chat_message("assistant"):
@@ -2577,23 +2564,7 @@ def stream_assistant_response(msg: AIMessage):
             time.sleep(0.05)
         return formatted_content
 
-# Update session state
-def update_session_state(session_id: str, messages: List, title: str):
-    st.session_state.chat_histories[session_id]["messages"] = messages
-    st.session_state.chat_histories[session_id]["title"] = title
-
-# Invoke LangChain graph with thinking steps
-def invoke_langchain_graph(state: Dict, session_id: str):
-    with st.status("Processing your request...", expanded=True) as status:
-        status.write("Collecting context...")
-        time.sleep(0.5)
-        status.write("Analyzing problems and errors...")
-        time.sleep(0.5)
-        status.write("Generating response...")
-        result = st.session_state.graph.invoke(state)
-    return result
-
-# Process user input
+# Process user input and invoke the graph
 def process_user_input(user_input: str, session_id: str):
     if not session_id:
         return
@@ -2603,9 +2574,16 @@ def process_user_input(user_input: str, session_id: str):
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         session["title"] = f"{user_input[:10]}{'...' if len(user_input) > 10 else ''} - {timestamp}"
     state = {"messages": session["messages"]}
-    result = invoke_langchain_graph(state, session_id)
+    with st.status("Processing your request...", expanded=True) as status:
+        status.write("Collecting context...")
+        time.sleep(0.5)
+        status.write("Analyzing problems and errors...")
+        time.sleep(0.5)
+        status.write("Generating response...")
+        result = st.session_state.graph.invoke(state)
     session["messages"] = result["messages"]
-    update_session_state(session_id, session["messages"], session["title"])
+    st.session_state.chat_histories[session_id]["messages"] = session["messages"]
+    st.session_state.chat_histories[session_id]["title"] = session["title"]
 
 # Display welcome screen
 def display_welcome():
@@ -2636,7 +2614,14 @@ def display_chat():
     last_processed_index = st.session_state.last_processed_index.get(session_id, -1)
     
     # Render previous messages
-    render_previous_messages(messages, last_processed_index)
+    for i in range(last_processed_index + 1):
+        if i < len(messages):
+            msg = messages[i]
+            if isinstance(msg, HumanMessage):
+                st.chat_message("user").markdown(msg.content)
+            elif isinstance(msg, AIMessage):
+                with st.chat_message("assistant"):
+                    st.markdown(parse_ai_message(msg))
     
     # Chat input
     user_input = st.chat_input("Type your message here...", key=f"input_{session_id}")
@@ -2644,13 +2629,12 @@ def display_chat():
         user_input = user_input.strip()
         st.chat_message("user").markdown(user_input)
         process_user_input(user_input, session_id)
-        # Stream the latest assistant response if available
         if messages and isinstance(messages[-1], AIMessage):
             stream_assistant_response(messages[-1])
             st.session_state.last_processed_index[session_id] = len(messages) - 1
 
-# Run the interface
-def run_interface():
+# Main function to run the app
+def main():
     st.set_page_config(page_title="Advanced Chatbot", page_icon="💬")
     initialize_session_state()
     render_sidebar()
@@ -2661,4 +2645,4 @@ def run_interface():
 
 # Entry point
 if __name__ == "__main__":
-    run_interface()
+    main()
