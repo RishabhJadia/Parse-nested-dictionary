@@ -1885,90 +1885,113 @@ You are an assistant that can handle casual conversation, basic arithmetic, Jobm
        - **Invalid Product**: If the product-like term doesn’t match or closely resemble "autosys" or "controlm" (e.g., "randomproduct", "xyz"), return: "I have information related to autosys and controlm only."
      - **Page Size**: If a number is 1 or 2 digits (e.g., 0 to 99) and appears in the input (with or without the keyword "page_size"), treat it as the 'page_size' parameter.
      - For ambiguous terms like "mapped to <value>", assume the value is the 'seal' if it fits the 3-6 digit rule.
-     - **Contextual Continuation**: If ""
+     - **Contextual Continuation**: If the current input provides some Jobmask parameters (e.g., environment, product) but lacks others (e.g., seal), check the last 3 messages in the conversation history for missing parameters related to a Jobmask request (e.g., "get jobmask", "fetch jobmask", "query jobmask"). Combine them to form a complete query if possible.
+     - **Execution Rule**: If both required parameters ('environment' and 'product') are present (after silent misspelling correction), proceed with the Jobmask API call by returning the tool call JSON. Do not ask for 'seal' as it is optional, and do not comment on corrections or processing steps—just return the tool call JSON.
+   - If required parameters are missing in the current input and cannot be found in recent history:
+     - If neither 'environment' nor 'product' is provided (regardless of whether optional parameters like 'seal' are present), return: {"error": "missing_parameters", "message": "Please provide correct input with environment and product, e.g., 'get jobmask for 88154 in prod for autosys'."}
+     - If only 'environment' is missing (and 'product' is present after correction), return: {"error": "missing_parameters", "message": "Please specify the 'environment' (e.g., prod, dev, uat, test, qa, cat) for the Jobmask request."}
+     - If only 'product' is missing (and 'environment' is present), return: {"error": "missing_parameters", "message": "Please specify the 'product' (e.g., autosys, controlm) for the Jobmask request."}
+     - Return: {"action": "call_tool", "tool": "jobmask", "query_params": {...}, "context": "Fetching job listings"}
+
+4. **Weather API**: Requires:
+   - Required: location (string)
+   - Optional: units (string, either "metric" or "imperial")
+   - Parameter Identification Rules:
+     - **Location**: If a word or phrase in the input matches a known city name (e.g., "London", "New York", "Tokyo") or is preceded by "in", "at", or "for" (e.g., "weather in London"), treat it as the 'location' parameter. If ambiguous, assume the last non-numeric, non-matching word/phrase is the location.
+     - **Units**: If "metric" or "imperial" appears in the input (with or without the keyword "units"), treat it as the 'units' parameter. If not specified, do not include it in the query.
+     - Trigger words like "weather", "temperature", or "forecast" indicate a Weather API request.
+     - Return: {"action": "call_tool", "tool": "weather", "query_params": {...}, "context": "Fetching weather information"}
+   - If required parameters are missing in the current input:
+     - If 'location' is missing, return: {"error": "missing_parameters", "message": "Please specify the 'location' (e.g., London, New York) for the Weather request."}
+
+Conversation history:
+{history}
+
+User input:
+{input}
+
+Return your response as either plain text (for casual input or invalid product) or a JSON object (for tool requests or errors). Do not include explanatory text about corrections or processing unless explicitly asked by the user. If the input resembles a Jobmask request but isn’t parsed correctly, return: {"error": "parsing_error", "message": "I understood this as a Jobmask request, but couldn’t parse it correctly. Try 'get jobmask for autosys in prod'."} The response will be wrapped in {"Message": <your_response>} by the system.
+"""
+)
 
 # Custom LLM class for API interaction
-class CustomLLM(LLM):
-    model_name: str = "custom_model"
-    api_endpoint: str = "http://your-api-host/chat/invoke"
+def create_custom_llm(api_endpoint: str = "http://your-api-host/chat/invoke") -> LLM:
+    class CustomLLM(LLM):
+        model_name: str = "custom_model"
+        api_endpoint: str = api_endpoint
+        
+        def __init__(self):
+            super().__init__()
+        
+        def _call(self, prompt: str, stop: Optional[List[str]] = None, **kwargs: Any) -> str:
+            payload = {"Questions": prompt}
+            try:
+                response = requests.post(self.api_endpoint, json=payload)
+                response.raise_for_status()
+                api_response = response.json()
+                return json.dumps({"Message": api_response.get("Mesaage", "Error: 'Mesaage' key missing")})
+            except requests.exceptions.RequestException as e:
+                return json.dumps({"Message": f"Failed to call /chat/invoke: {str(e)}"})
+        
+        @property
+        def _llm_type(self) -> str:
+            return "custom_llm"
+        
+        @property
+        def _identifying_params(self) -> Dict[str, Any]:
+            return {"model_name": self.model_name, "api_endpoint": self.api_endpoint}
     
-    def __init__(self, api_endpoint: Optional[str] = None):
-        super().__init__()
-        if api_endpoint:
-            self.api_endpoint = api_endpoint
-    
-    def _call(self, prompt: str, stop: Optional[List[str]] = None, **kwargs: Any) -> str:
-        payload = {"Questions": prompt}  # Prepare API payload
-        try:
-            response = requests.post(self.api_endpoint, json=payload)  # Make API call
-            response.raise_for_status()  # Check for HTTP errors
-            api_response = response.json()  # Parse response
-            return json.dumps({"Message": api_response.get("Mesaage", "Error: 'Mesaage' key missing")})  # Return JSON response
-        except requests.exceptions.RequestException as e:
-            return json.dumps({"Message": f"Failed to call /chat/invoke: {str(e)}"})  # Handle errors
-    
-    @property
-    def _llm_type(self) -> str:
-        return "custom_llm"  # Identify LLM type
-    
-    @property
-    def _identifying_params(self) -> Dict[str, Any]:
-        return {"model_name": self.model_name, "api_endpoint": self.api_endpoint}  # Provide identifying parameters
+    return CustomLLM()
 
-# Instantiate custom LLM
-custom_llm = CustomLLM(api_endpoint="http://your-api-host/chat/invoke")
-
-# Define LLM node for processing user input
+# Define LLM node
 def llm_node(state: MessageState) -> MessageState:
-    last_message = state["messages"][-1]  # Get the latest message
-    if isinstance(last_message, HumanMessage) or isinstance(last_message, AIMessage):
-        history = state["messages"][:-1]  # Exclude the latest message for history
-        history_str = "\n".join([msg.content for msg in history])  # Format history as string
-        
+    last_message = state["messages"][-1]
+    if isinstance(last_message, (HumanMessage, AIMessage)):
+        history = state["messages"][:-1]
+        history_str = "\n".join([msg.content for msg in history])
         input_content = last_message.content if isinstance(last_message, HumanMessage) else json.loads(last_message.content).get("Message", "")
-        formatted_prompt = multi_tool_prompt_template.format(history=history_str, input=input_content)  # Create prompt
-        
-        response = custom_llm(formatted_prompt)  # Call LLM
-        state["messages"].append(AIMessage(content=response))  # Append response
+        formatted_prompt = multi_tool_prompt_template.format(history=history_str, input=input_content)
+        custom_llm = create_custom_llm()
+        response = custom_llm(formatted_prompt)
+        state["messages"].append(AIMessage(content=response))
     return state
 
-# Define Jobmask tool for API calls
+# Define Jobmask tool
 def jobmask_tool(query_params: Dict[str, str]) -> str:
     if "page_size" not in query_params:
-        query_params["page_size"] = "10"  # Set default page size
-    
+        query_params["page_size"] = "10"
     try:
-        api_url = "https://api.jobmask.com/search"  # Jobmask API endpoint
-        response = requests.get(api_url, params=query_params)  # Make API call
-        response.raise_for_status()  # Check for HTTP errors
-        data = response.json()  # Parse response
-        return json.dumps({"result": data})  # Return JSON result
+        api_url = "https://api.jobmask.com/search"
+        response = requests.get(api_url, params=query_params)
+        response.raise_for_status()
+        data = response.json()
+        return json.dumps({"result": data})
     except requests.exceptions.RequestException as e:
-        return json.dumps({"error": f"Jobmask API call failed: {str(e)}"})  # Handle errors
+        return json.dumps({"error": f"Jobmask API call failed: {str(e)}"})
 
-# Define Weather tool for API calls
+# Define Weather tool
 def weather_tool(query_params: Dict[str, str]) -> str:
     try:
-        api_url = "https://api.openweathermap.org/data/2.5/weather"  # Weather API endpoint
-        response = requests.get(api_url, params=query_params)  # Make API call
-        response.raise_for_status()  # Check for HTTP errors
-        data = response.json()  # Parse response
-        return json.dumps({"result": data})  # Return JSON result
+        api_url = "https://api.openweathermap.org/data/2.5/weather"
+        response = requests.get(api_url, params=query_params)
+        response.raise_for_status()
+        data = response.json()
+        return json.dumps({"result": data})
     except requests.exceptions.RequestException as e:
-        return json.dumps({"error": f"Weather API call failed: {str(e)}"})  # Handle errors
+        return json.dumps({"error": f"Weather API call failed: {str(e)}"})
 
-# Check cache for previous Jobmask results
+# Check cache for Jobmask results
 def check_cache(state: MessageState) -> Optional[Dict[str, Any]]:
-    last_message = json.loads(state["messages"][-1].content)  # Parse last message
+    last_message = json.loads(state["messages"][-1].content)
     message_content = last_message["Message"]
     inner_content = json.loads(message_content) if isinstance(message_content, str) else message_content
     
     if inner_content.get("action") == "call_tool" and inner_content.get("tool") == "jobmask":
-        current_query_params = inner_content["query_params"]  # Get query parameters
+        current_query_params = inner_content["query_params"]
         if "page_size" not in current_query_params:
-            current_query_params["page_size"] = "10"  # Set default page size
+            current_query_params["page_size"] = "10"
         
-        for i in range(len(state["messages"]) - 2, -1, -1):  # Iterate backward through messages
+        for i in range(len(state["messages"]) - 2, -1, -1):
             msg = state["messages"][i]
             if isinstance(msg, AIMessage):
                 try:
@@ -1979,177 +2002,223 @@ def check_cache(state: MessageState) -> Optional[Dict[str, Any]]:
                             if (tool_call.get("action") == "call_tool" and 
                                 tool_call.get("tool") == "jobmask" and 
                                 tool_call["query_params"] == current_query_params):
-                                return prev_content  # Return cached result
+                                return prev_content
                 except (json.JSONDecodeError, KeyError):
                     continue
     return None
 
-# Define Jobmask tool node
+# Define tool nodes
 def jobmask_tool_node(state: MessageState) -> MessageState:
-    cached_result = check_cache(state)  # Check for cached result
+    cached_result = check_cache(state)
     if cached_result:
-        state["messages"].append(AIMessage(content=json.dumps({"Message": cached_result})))  # Use cached result
+        state["messages"].append(AIMessage(content=json.dumps({"Message": cached_result})))
     else:
-        last_message = json.loads(state["messages"][-1].content)  # Parse last message
+        last_message = json.loads(state["messages"][-1].content)
         message_content = last_message["Message"]
         inner_content = json.loads(message_content) if isinstance(message_content, str) else message_content
         if inner_content.get("action") == "call_tool" and inner_content.get("tool") == "jobmask":
-            query_params = inner_content["query_params"]  # Get query parameters
-            result = jobmask_tool(query_params)  # Call Jobmask tool
-            state["messages"].append(AIMessage(content=result))  # Append result
+            query_params = inner_content["query_params"]
+            result = jobmask_tool(query_params)
+            state["messages"].append(AIMessage(content=result))
     return state
 
-# Define Weather tool node
 def weather_tool_node(state: MessageState) -> MessageState:
-    last_message = json.loads(state["messages"][-1].content)  # Parse last message
+    last_message = json.loads(state["messages"][-1].content)
     message_content = last_message["Message"]
     inner_content = json.loads(message_content) if isinstance(message_content, str) else message_content
     if inner_content.get("action") == "call_tool" and inner_content.get("tool") == "weather":
-        query_params = inner_content["query_params"]  # Get query parameters
-        result = weather_tool(query_params)  # Call Weather tool
-        state["messages"].append(AIMessage(content=result))  # Append result
+        query_params = inner_content["query_params"]
+        result = weather_tool(query_params)
+        state["messages"].append(AIMessage(content=result))
     return state
 
-# Router function to direct flow
+# Router function
 def router_function(state: MessageState) -> str:
-    last_message = json.loads(state["messages"][-1].content)  # Parse last message
+    last_message = json.loads(state["messages"][-1].content)
     message_content = last_message["Message"]
-    
     try:
         inner_content = json.loads(message_content) if isinstance(message_content, str) else message_content
         if inner_content.get("action") == "call_tool":
-            tool_name = inner_content.get("tool")  # Get tool name
+            tool_name = inner_content.get("tool")
             if tool_name == "jobmask":
-                return "jobmask_tool"  # Route to Jobmask node
+                return "jobmask_tool"
             elif tool_name == "weather":
-                return "weather_tool"  # Route to Weather node
+                return "weather_tool"
     except json.JSONDecodeError:
         pass
-    
-    return END  # End flow for non-tool responses
+    return END
 
-# Build and compile the LangChain graph
-graph_builder = StateGraph(MessageState)
-graph_builder.add_node("llm", llm_node)  # Add LLM node
-graph_builder.add_node("jobmask_tool", jobmask_tool_node)  # Add Jobmask tool node
-graph_builder.add_node("weather_tool", weather_tool_node)  # Add Weather tool node
-graph_builder.set_entry_point("llm")  # Set entry point
-graph_builder.add_conditional_edges("llm", router_function)  # Add conditional routing
-graph_builder.add_edge("jobmask_tool", END)  # End after Jobmask tool
-graph_builder.add_edge("weather_tool", END)  # End after Weather tool
-graph = graph_builder.compile()  # Compile graph
+# Setup LangChain graph
+def setup_graph():
+    graph_builder = StateGraph(MessageState)
+    graph_builder.add_node("llm", llm_node)
+    graph_builder.add_node("jobmask_tool", jobmask_tool_node)
+    graph_builder.add_node("weather_tool", weather_tool_node)
+    graph_builder.set_entry_point("llm")
+    graph_builder.add_conditional_edges("llm", router_function)
+    graph_builder.add_edge("jobmask_tool", END)
+    graph_builder.add_edge("weather_tool", END)
+    return graph_builder.compile()
 
-# Initialize session state variables
+# Initialize session state
 def initialize_session_state():
+    if 'graph' not in st.session_state:
+        st.session_state.graph = setup_graph()
     if 'chat_histories' not in st.session_state:
-        st.session_state.chat_histories = {}  # Store all chat history
+        st.session_state.chat_histories = {}
     if 'current_history_session_id' not in st.session_state:
-        st.session_state.current_history_session_id = None  # Track active history session
+        st.session_state.current_history_session_id = None
     if 'session_counter' not in st.session_state:
-        st.session_state.session_counter = 0  # Counter for session IDs
+        st.session_state.session_counter = 0
     if 'chat_created' not in st.session_state:
-        st.session_state.chat_created = False  # Flag for any chat creation
+        st.session_state.chat_created = False
     if 'show_welcome' not in st.session_state:
-        st.session_state.show_welcome = True  # Control welcome message display
+        st.session_state.show_welcome = True
     if 'last_processed_index' not in st.session_state:
-        st.session_state.last_processed_index = {}  # Track last displayed message index per session
+        st.session_state.last_processed_index = {}
 
-# Function to start a new chat session
+# Start a new chat session
 def start_new_chat():
-    if not st.session_state.chat_created:  # If no chat exists, allow creation
+    if not st.session_state.chat_created:
         st.session_state.chat_created = True
-    elif st.session_state.current_history_session_id:  # Check if current history session exists
+    elif st.session_state.current_history_session_id:
         current_session = st.session_state.chat_histories.get(
             st.session_state.current_history_session_id, {})
-        if not current_session.get("messages"):  # Warn if session is empty
-            st.warning(
-                "Please start a conversation before creating a new chat.")
+        if not current_session.get("messages"):
+            st.warning("Please start a conversation before creating a new chat.")
             return
+    st.session_state.session_counter += 1
+    session_id = f"Chat {st.session_state.session_counter}"
+    st.session_state.chat_histories[session_id] = {"messages": [], "title": "New Chat"}
+    st.session_state.current_history_session_id = session_id
+    st.session_state.last_processed_index[session_id] = -1
+    st.session_state.show_welcome = False
+    st.rerun()
 
-    st.session_state.session_counter += 1  # Increment session counter
-    session_id = f"Chat {st.session_state.session_counter}"  # Create unique session ID
-    st.session_state.chat_histories[session_id] = {
-        "messages": [], "title": "New Chat"}  # Initialize session with empty messages and default title
-    st.session_state.current_history_session_id = session_id  # Set as current history session
-    st.session_state.last_processed_index[session_id] = -1  # Initialize last processed index
-    st.session_state.show_welcome = False  # Hide welcome message
-    st.rerun()  # Refresh the app
-
-# Function to display the welcome message
+# Show welcome message
 def show_welcome_message():
-    st.session_state.current_history_session_id = None  # Clear current session
-    st.session_state.show_welcome = True  # Show welcome message
-    st.rerun()  # Refresh the app
+    st.session_state.current_history_session_id = None
+    st.session_state.show_welcome = True
+    st.rerun()
 
-# Sidebar for conversation history
+# Render sidebar
 def render_sidebar():
     with st.sidebar:
-        # Header section
-        col1, col2 = st.columns([0.8, 0.2])  # Split columns for title and button
+        col1, col2 = st.columns([0.8, 0.2])
         with col1:
-            st.markdown("### Conversations")  # Display history title
+            st.markdown("### Conversations")
         with col2:
-            # Button to show welcome message
             if st.button("ℹ️", help="Show Welcome Message", key="welcome_button"):
                 show_welcome_message()
-
-        # Button to create a new chat
         if st.button("New Chat", key="new_chat"):
             start_new_chat()
-
-        # Display chat history buttons
         if st.session_state.chat_histories:
-            for session_id in reversed(list(st.session_state.chat_histories.keys())):  # Reverse to show newest first
-                title = st.session_state.chat_histories[session_id]["title"]  # Get history session title
-                if st.button(title, key=session_id):  # Create button for session
-                    st.session_state.current_history_session_id = session_id  # Set as current session
-                    st.session_state.show_welcome = False  # Hide welcome message
+            for session_id in reversed(list(st.session_state.chat_histories.keys())):
+                title = st.session_state.chat_histories[session_id]["title"]
+                if st.button(title, key=session_id):
+                    st.session_state.current_history_session_id = session_id
+                    st.session_state.show_welcome = False
         else:
-            st.markdown("*No conversations yet.*")  # Show if no sessions exist
+            st.markdown("*No conversations yet.*")
 
-# Process user input and invoke the graph
-def process_user_input(user_input, session_id):
-    if not session_id:  # Ensure a history session is active
+# Format message output
+def format_output(content: str) -> str:
+    if '!@#$' in content:
+        lines = content.split('!@#$')
+        formatted_lines = [f"- {line}" for line in lines]
+        return "\n".join(formatted_lines)
+    return content.strip()
+
+# Parse AI message content
+def parse_ai_message(msg: AIMessage) -> str:
+    try:
+        content = json.loads(msg.content)
+        message_content = content.get("Message", msg.content)
+        if isinstance(message_content, dict):
+            return format_output(json.dumps(message_content))
+        return format_output(message_content)
+    except json.JSONDecodeError:
+        return format_output(msg.content)
+
+# Render previous messages statically
+def render_previous_messages(messages: List, last_processed_index: int):
+    for i in range(last_processed_index + 1):
+        if i < len(messages):
+            msg = messages[i]
+            if isinstance(msg, HumanMessage):
+                st.chat_message("user").markdown(msg.content)
+            elif isinstance(msg, AIMessage):
+                with st.chat_message("assistant"):
+                    st.markdown(parse_ai_message(msg))
+
+# Render new user message
+def render_new_user_message(messages: List, start_index: int, session_id: str) -> int:
+    last_processed_index = start_index - 1
+    for i in range(start_index, len(messages)):
+        msg = messages[i]
+        if isinstance(msg, HumanMessage):
+            st.chat_message("user").markdown(msg.content)
+            last_processed_index = i
+            st.session_state.last_processed_index[session_id] = i
+    return last_processed_index
+
+# Stream assistant response
+def stream_assistant_response(msg: AIMessage):
+    with st.chat_message("assistant"):
+        formatted_content = parse_ai_message(msg)
+        placeholder = st.empty()
+        displayed_response = ""
+        for char in formatted_content:
+            displayed_response += char
+            placeholder.markdown(displayed_response)
+            time.sleep(0.05)
+        return formatted_content
+
+# Update session state
+def update_session_state(session_id: str, messages: List, title: str):
+    st.session_state.chat_histories[session_id]["messages"] = messages
+    st.session_state.chat_histories[session_id]["title"] = title
+
+# Invoke LangChain graph with thinking steps
+def invoke_langchain_graph(state: Dict, session_id: str):
+    with st.status("Processing your request...", expanded=True) as status:
+        status.write("Collecting context...")
+        time.sleep(0.5)  # Simulate context collection
+        status.write("Analyzing problems and errors...")
+        time.sleep(0.5)  # Simulate analysis
+        status.write("Generating response...")
+        result = st.session_state.graph.invoke(state)
+    return result
+
+# Process user input
+def process_user_input(user_input: str, session_id: str):
+    if not session_id:
         return
-
-    session = st.session_state.chat_histories[session_id]  # Get current history session
-    session["messages"].append(HumanMessage(content=user_input))  # Append user message
-
-    # Update session title with first message and timestamp
+    session = st.session_state.chat_histories[session_id]
+    session["messages"].append(HumanMessage(content=user_input))
     if session["title"] == "New Chat":
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')  # Get current timestamp
-        session["title"] = f"{user_input[:10]}{'...' if len(user_input) > 10 else ''} - {timestamp}"  # Set title as <input> - <timestamp>
-
-    # Process the input through the LangChain graph
-    state = {"messages": session["messages"]}  # Prepare state for graph
-    with st.spinner("Thinking..."):
-        time.sleep(1)  # Simulate processing delay for better UX
-        result = graph.invoke(state)  # Invoke LangChain graph
-        session["messages"] = result["messages"]  # Update session messages with graph output
-
-    # Update session state
-    st.session_state.chat_histories[session_id]["messages"] = session["messages"]  # Update messages
-    st.session_state.chat_histories[session_id]["title"] = session["title"]  # Update title
-    # Note: We don't call st.rerun() here to allow streaming to complete
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        session["title"] = f"{user_input[:10]}{'...' if len(user_input) > 10 else ''} - {timestamp}"
+    state = {"messages": session["messages"]}
+    result = invoke_langchain_graph(state, session_id)
+    session["messages"] = result["messages"]
+    update_session_state(session_id, session["messages"], session["title"])
 
 # Display welcome screen
 def display_welcome():
     col1, col2 = st.columns([0.2, 1])
     with col1:
-        # Fallback to placeholder image if ROOT_DIR is unset
         try:
             ai_assistant_image_path = os.path.join(os.getenv('ROOT_DIR', ''), 'static', 'ai_assistant.png')
-            st.image(ai_assistant_image_path, caption="AI Assistant", width=200)  # Placeholder image
+            st.image(ai_assistant_image_path, caption="AI Assistant", width=200)
         except:
-            st.image("https://via.placeholder.com/200", caption="AI Assistant", width=200)  # Fallback image
-
+            st.image("https://via.placeholder.com/200", caption="AI Assistant", width=200)
     with col2:
-        st.title("JobMask Registration Agent")  # App title
+        st.title("JobMask Registration Agent")
         st.markdown(
             """
             Welcome to JobMask Registration Agent.
             Designed specifically for managing and orchestrating job masks in autosys and Control-M environments.
-
             **To start the conversation, click on 'New Chat'.**
             """
         )
@@ -2159,100 +2228,37 @@ def display_chat():
     session_id = st.session_state.current_history_session_id
     if not session_id:
         return
-
-    # Get current session data
-    current_session = st.session_state.chat_histories[session_id]  # Retrieve current history session
-    messages = current_session["messages"]  # Retrieve session history messages
-
-    # Get last processed index for this session
+    current_session = st.session_state.chat_histories[session_id]
+    messages = current_session["messages"]
     last_processed_index = st.session_state.last_processed_index.get(session_id, -1)
-
-    # Display previous messages (up to last_processed_index) statically
-    for i in range(last_processed_index + 1):
-        if i < len(messages):
-            msg = messages[i]
-            if isinstance(msg, HumanMessage):
-                st.chat_message("user").markdown(msg.content)  # Static user message
-            elif isinstance(msg, AIMessage):
-                with st.chat_message("assistant"):
-                    try:
-                        content = json.loads(msg.content)  # Parse AI message
-                        message_content = content.get("Message", msg.content)
-                        if isinstance(message_content, dict):
-                            formatted_content = format_output(json.dumps(message_content))
-                        else:
-                            formatted_content = format_output(message_content)
-                        st.markdown(formatted_content)  # Static assistant message
-                    except json.JSONDecodeError:
-                        st.markdown(msg.content)  # Static fallback for unparsable content
-
-    # Display new messages (after last_processed_index)
+    
+    # Render previous messages
+    render_previous_messages(messages, last_processed_index)
+    
+    # Render new messages
     new_messages_start = last_processed_index + 1
     if new_messages_start < len(messages):
-        # Display any new user messages statically
-        for i in range(new_messages_start, len(messages)):
-            msg = messages[i]
-            if isinstance(msg, HumanMessage):
-                st.chat_message("user").markdown(msg.content)  # Static new user message
-                st.session_state.last_processed_index[session_id] = i  # Update processed index
-
-        # Stream the latest assistant message if it exists
-        if len(messages) > new_messages_start and isinstance(messages[-1], AIMessage):
-            with st.chat_message("assistant"):
-                try:
-                    content = json.loads(messages[-1].content)  # Parse latest AI message
-                    message_content = content.get("Message", messages[-1].content)
-                    if isinstance(message_content, dict):
-                        formatted_content = format_output(json.dumps(message_content))
-                    else:
-                        formatted_content = format_output(message_content)
-                    placeholder = st.empty()  # Create placeholder for streaming
-                    displayed_response = ""
-                    for char in formatted_content:  # Stream character by character
-                        displayed_response += char
-                        placeholder.markdown(displayed_response)  # Update placeholder
-                        time.sleep(0.05)  # Streaming delay
-                except json.JSONDecodeError:
-                    placeholder = st.empty()  # Create placeholder for streaming
-                    displayed_response = ""
-                    for char in messages[-1].content:  # Stream character by character
-                        displayed_response += char
-                        placeholder.markdown(displayed_response)  # Update placeholder
-                        time.sleep(0.05)  # Streaming delay
-                st.session_state.last_processed_index[session_id] = len(messages) - 1  # Update processed index
-
-    # Chat input field
-    user_input = st.chat_input(
-        "Type your message here...",
-        key=f"input_{session_id}"  # Unique key for input
-    )
+        last_processed_index = render_new_user_message(messages, new_messages_start, session_id)
+        if len(messages) > last_processed_index + 1 and isinstance(messages[-1], AIMessage):
+            stream_assistant_response(messages[-1])
+            st.session_state.last_processed_index[session_id] = len(messages) - 1
+    
+    # Chat input
+    user_input = st.chat_input("Type your message here...", key=f"input_{session_id}")
     if user_input:
         process_user_input(user_input.strip(), session_id)
-        st.rerun()  # Refresh to update the UI after processing
+        st.rerun()
 
-# Format output for special cases
-def format_output(content: str):
-    if '!@#$' in content:
-        lines = content.split('!@#$')
-        formatted_lines = [f"- {line}" for line in lines]
-        return "\n".join(formatted_lines)
-    else:
-        return content.strip()
-
-# Main function to run the app
-def main():
-    st.set_page_config(page_title="Advanced Chatbot", page_icon="💬")  # Configure page
-    initialize_session_state()  # Initialize session state
+# Run the interface
+def run_interface():
+    st.set_page_config(page_title="Advanced Chatbot", page_icon="💬")
+    initialize_session_state()
     render_sidebar()
-
-    # Main content area
     if st.session_state.show_welcome or st.session_state.current_history_session_id is None:
-        # Display welcome screen
         display_welcome()
     else:
-        # Display chat interface
         display_chat()
 
 # Entry point
 if __name__ == "__main__":
-    main()
+    run_interface()
