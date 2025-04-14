@@ -2076,6 +2076,8 @@ def initialize_session_state():
         st.session_state.show_welcome = True
     if 'last_processed_index' not in st.session_state:
         st.session_state.last_processed_index = {}
+    if 'pending_input' not in st.session_state:
+        st.session_state.pending_input = None  # Track user input for immediate display
 
 # Start a new chat session
 def start_new_chat():
@@ -2093,12 +2095,14 @@ def start_new_chat():
     st.session_state.current_history_session_id = session_id
     st.session_state.last_processed_index[session_id] = -1
     st.session_state.show_welcome = False
+    st.session_state.pending_input = None
     st.rerun()
 
 # Show welcome message
 def show_welcome_message():
     st.session_state.current_history_session_id = None
     st.session_state.show_welcome = True
+    st.session_state.pending_input = None
     st.rerun()
 
 # Render sidebar
@@ -2118,6 +2122,7 @@ def render_sidebar():
                 if st.button(title, key=session_id):
                     st.session_state.current_history_session_id = session_id
                     st.session_state.show_welcome = False
+                    st.session_state.pending_input = None
         else:
             st.markdown("*No conversations yet.*")
 
@@ -2151,17 +2156,6 @@ def render_previous_messages(messages: List, last_processed_index: int):
                 with st.chat_message("assistant"):
                     st.markdown(parse_ai_message(msg))
 
-# Render new user message
-def render_new_user_message(messages: List, start_index: int, session_id: str) -> int:
-    last_processed_index = start_index - 1
-    for i in range(start_index, len(messages)):
-        msg = messages[i]
-        if isinstance(msg, HumanMessage):
-            st.chat_message("user").markdown(msg.content)
-            last_processed_index = i
-            st.session_state.last_processed_index[session_id] = i
-    return last_processed_index
-
 # Stream assistant response
 def stream_assistant_response(msg: AIMessage):
     with st.chat_message("assistant"):
@@ -2183,9 +2177,9 @@ def update_session_state(session_id: str, messages: List, title: str):
 def invoke_langchain_graph(state: Dict, session_id: str):
     with st.status("Processing your request...", expanded=True) as status:
         status.write("Collecting context...")
-        time.sleep(0.5)  # Simulate context collection
+        time.sleep(0.5)
         status.write("Analyzing problems and errors...")
-        time.sleep(0.5)  # Simulate analysis
+        time.sleep(0.5)
         status.write("Generating response...")
         result = st.session_state.graph.invoke(state)
     return result
@@ -2203,6 +2197,7 @@ def process_user_input(user_input: str, session_id: str):
     result = invoke_langchain_graph(state, session_id)
     session["messages"] = result["messages"]
     update_session_state(session_id, session["messages"], session["title"])
+    st.session_state.pending_input = None  # Clear pending input
 
 # Display welcome screen
 def display_welcome():
@@ -2235,18 +2230,22 @@ def display_chat():
     # Render previous messages
     render_previous_messages(messages, last_processed_index)
     
-    # Render new messages
-    new_messages_start = last_processed_index + 1
-    if new_messages_start < len(messages):
-        last_processed_index = render_new_user_message(messages, new_messages_start, session_id)
-        if len(messages) > last_processed_index + 1 and isinstance(messages[-1], AIMessage):
-            stream_assistant_response(messages[-1])
-            st.session_state.last_processed_index[session_id] = len(messages) - 1
+    # Handle pending input from previous submission
+    if st.session_state.pending_input:
+        user_input, input_session_id = st.session_state.pending_input
+        if input_session_id == session_id:
+            st.chat_message("user").markdown(user_input)
+            process_user_input(user_input, session_id)
+            if messages and isinstance(messages[-1], AIMessage):
+                stream_assistant_response(messages[-1])
+                st.session_state.last_processed_index[session_id] = len(messages) - 1
     
     # Chat input
     user_input = st.chat_input("Type your message here...", key=f"input_{session_id}")
     if user_input:
-        process_user_input(user_input.strip(), session_id)
+        user_input = user_input.strip()
+        st.chat_message("user").markdown(user_input)
+        st.session_state.pending_input = (user_input, session_id)
         st.rerun()
 
 # Run the interface
