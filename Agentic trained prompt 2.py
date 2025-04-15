@@ -2646,3 +2646,46 @@ def main():
 # Entry point
 if __name__ == "__main__":
     main()
+-----------------------------
+def render_sidebar():
+    with st.sidebar:
+        # Header with a cleaner, modern look
+        st.markdown(
+            """
+            <h2 style='font-size: 24px; color: #1f77b4;'>Conversations</h2>
+            <hr style='margin: 10px 0;'>
+            """,
+            unsafe_allow_html=True
+        )
+
+        # Columns for layout
+        col1, col2 = st.columns([0.8, 0.2])
+        with col1:
+            if st.button("New Chat", key="new_chat", help="Start a new conversation"):
+                start_new_chat()
+        with col2:
+            if st.button("ℹ️", help="Show Welcome Message", key="welcome_button"):
+                show_welcome_message()
+
+        # Display chat history in an expandable or list format
+        if st.session_state.chat_histories:
+            for session_id in reversed(list(st.session_state.chat_histories.keys())):
+                title = st.session_state.chat_histories[session_id]["title"]
+                # Use an expander for each conversation (similar to Streamlit's demo UI)
+                with st.expander(f"📜 {title}", expanded=False):
+                    if st.button("Load", key=f"load_{session_id}", help=f"Load {title}"):
+                        st.session_state.current_history_session_id = session_id
+                        st.session_state.show_welcome = False
+                    if st.button("Delete", key=f"delete_{session_id}", help=f"Delete {title}"):
+                        del st.session_state.chat_histories[session_id]
+                        if st.session_state.current_history_session_id == session_id:
+                            st.session_state.current_history_session_id = None
+                            st.session_state.show_welcome = True
+                        st.rerun()
+        else:
+            st.markdown(
+                """
+                <p style='color: #888; font-style: italic;'>No conversations yet.</p>
+                """,
+                unsafe_allow_html=True
+            )
