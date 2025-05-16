@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>OpenAPI JSON to Python Function Converter</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Fira+Code&family=Nunito:wght@400;700&display=swap');
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    font-family: 'Nunito', sans-serif;
+    background: linear-gradient(135deg, #5c6bc0, #9fa8da);
+    margin: 0;
+    padding: 2rem 1rem;
+    color: #222;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  h1 {
+    margin-bottom: 1rem;
+    font-weight: 700;
+    color: #fff;
+    text-shadow: 0 2px 5px rgba(0,0,0,0.3);
+    user-select: none;
+  }
+  .container {
+    display: flex;
+    gap: 1rem;
+    width: 100%;
+    max-width: 900px;
+  }
+  textarea {
+    width: 100%;
+    height: 400px;
+    border-radius: 8px;
+    border: none;
+    padding: 1rem;
+    font-family: 'Fira Code', monospace;
+    font-size: 1rem;
+    resize: none;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+    background-color: #f3f4fb;
+    color: #181818;
+    transition: background-color 0.3s ease;
+    line-height: 1.4;
+    white-space: pre;
+    overflow-wrap: normal;
+  }
+  textarea:focus {
+    background-color: #e0e3f7;
+    outline: none;
+  }
+  textarea[readonly] {
+    background-color: #272822;
+    color: #f8f8f2;
+  }
+  button {
+    margin-top: 1rem;
+    background: #ff416c;
+    background: linear-gradient(45deg, #ff416c, #ff4b2b);
+    border: none;
+    border-radius: 50px;
+    padding: 0.9rem 3rem;
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: #fff;
+    cursor: pointer;
+    box-shadow: 0 6px 20px rgba(255,65,108,0.6);
+    transition: all 0.3s ease;
+    user-select: none;
+    align-self: center;
+  }
+  button:hover {
+    box-shadow: 0 8px 25px rgba(255,65,108,0.95);
+    transform: scale(1.05);
+  }
+  .left label, .right label {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+    user-select: none;
+    color: #fff;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+  }
+  .copy-btn {
+    background: #42a5f5;
+    background: linear-gradient(45deg, #42a5f5, #478ed1);
+    border: none;
+    border-radius: 30px;
+    padding: 0.3rem 1rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #fff;
+    cursor: pointer;
+    box-shadow: 0 4px 15px rgba(66,165,245,0.8);
+    transition: all 0.25s ease;
+    user-select: none;
+    margin-left: 10px;
+  }
+  .copy-btn:hover {
+    box-shadow: 0 6px 20px rgba(66,165,245,1);
+    transform: scale(1.1);
+  }
+  .left, .right {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
+  @media (max-width: 850px) {
+    .container {
+      flex-direction: column;
+    }
+    textarea {
+      height: 250px;
+    }
+  }
+</style>
+</head>
+<body>
+<h1>OpenAPI JSON to Python Function Converter</h1>
+<div class="container">
+  <div class="left">
+    <label for="pythonOutput">Python Function Output
+      <button class="copy-btn" id="copyBtn" title="Copy to clipboard">Copy</button>
+    </label>
+    <textarea id="pythonOutput" readonly placeholder="Python function will appear here..."></textarea>
+  </div>
+  <div class="right">
+    <label for="openapiInput">OpenAPI JSON Spec Input</label>
+    <textarea id="openapiInput" placeholder='Paste your OpenAPI JSON spec here'></textarea>
+  </div>
+</div>
+<button id="convertBtn">Convert to Python</button>
+
+<script>
+  const openapiInput = document.getElementById('openapiInput');
+  const pythonOutput = document.getElementById('pythonOutput');
+  const convertBtn = document.getElementById('convertBtn');
+  const copyBtn = document.getElementById('copyBtn');
+
+  // Helper to safely get first key from object
+  function firstKey(obj) {
+    return obj ? Object.keys(obj)[0] : null;
+  }
+
+  // Generate Python function code based on OpenAPI spec snippet
+  function generatePythonFunction(openapi) {
+    // Basic validation and parsing
+    if (!openapi.paths) {
+      return "# Error: 'paths' field missing in OpenAPI spec.";
+    }
+
+    // Take first path and method for demo
+    const pathKey = firstKey(openapi.paths);
+    if (!pathKey) return "# Error: No paths defined in OpenAPI spec.";
+
+    const methodsObj = openapi.paths[pathKey];
+    const method = firstKey(methodsObj);
+    if (!method) return "# Error: No method defined under path.";
+
+    const endpoint = methodsObj[method];
+    const fnName = endpoint.operationId ? endpoint.operationId : `call_${method}_${pathKey.replace(/[\/{}]/g, '_').replace(/__+/g, '_').replace(/^_+|_+$/g, '')}`;
+
+    // Parameters extraction (query/path)
+    let paramsList = [];
+    if (endpoint.parameters) {
+      paramsList = endpoint.parameters.map(p => p.name);
+    }
+
+    // Build function header with parameters
+    const fnHeader = `def ${fnName}(${paramsList.join(', ')}) :`;
+
+    // Build docstring
+    let doc = '\"\"\"\n';
+    if (endpoint.summary) {
+      doc += `    ${endpoint.summary}\n\n`;
+    }
+
+    if (endpoint.description) {
+      doc += `    ${endpoint.description}\n\n`;
+    }
+    doc += `    Calls the API endpoint '${method.toUpperCase()} ${pathKey}'\n\"\"\"`;
+
+    // Build URL path with params placeholders replaced by f-string fields
+    let urlPath = pathKey.replace(/{(\w+)}/g, '${$1}'); // use ${} for f-strings interpolation
+
+    // Construct Python code lines as an array
+    let lines = [];
+    lines.push(fnHeader);
+    lines.push('    ' + doc);
+    lines.push('');
+    // Import requests mention in comment (not actually importing)
+    lines.push('    # You may need: import requests');
+    // Build url with f-string
+    lines.push(`    url = f"${urlPath}"`);
+    lines.push('');
+    lines.push(`    # Example: replace below with actual request logic`);
+    lines.push(`    response = requests.${method}(url)`);
+    lines.push('    return response');
+    return lines.join('\\n');
+  }
+
+  convertBtn.addEventListener('click', () => {
+    let inputText = openapiInput.value.trim();
+    if (!inputText) {
+      pythonOutput.value = "# Please provide OpenAPI JSON spec in the right textarea.";
+      return;
+    }
+    try {
+      const openapi = JSON.parse(inputText);
+      const pythonCode = generatePythonFunction(openapi);
+      pythonOutput.value = pythonCode;
+    } catch (err) {
+      pythonOutput.value = "# Error parsing JSON: " + err.message;
+    }
+  });
+
+  copyBtn.addEventListener('click', () => {
+    if (!pythonOutput.value) {
+      return;
+    }
+    navigator.clipboard.writeText(pythonOutput.value).then(() => {
+      const originalText = copyBtn.textContent;
+      copyBtn.textContent = 'Copied!';
+      setTimeout(() => {
+        copyBtn.textContent = originalText;
+      }, 1500);
+    }).catch(() => {
+      alert('Failed to copy text. Please copy manually.');
+    });
+  });
+</script>
+</body>
+</html>
+
