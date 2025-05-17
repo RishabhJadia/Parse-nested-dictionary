@@ -81,7 +81,8 @@ memory = ConversationBufferMemory(memory_key="history", return_messages=True)
 # Function to call LLM with memory
 async def call_llm_with_memory(state):
     chunk = state["chunk"]
-    messages = prompt_template.format_messages(chunk=chunk)
+    base_url = state["base_url"]
+    messages = prompt_template.format_messages(chunk=chunk, base_url=base_url)
     memory.chat_memory.add_user_message(chunk)
 
     logger.info(f"Processing chunk of size {len(chunk)}")
@@ -107,7 +108,7 @@ async def main(openapi_spec: str):
 
     combined_result = ""
     for chunk in chunks:
-        output = await graph.invoke({"chunk": chunk})
+        output = await graph.invoke({"chunk": chunk, "base_url":base_url})
         combined_result += output["result"]
 
     logger.info("All chunks processed")
