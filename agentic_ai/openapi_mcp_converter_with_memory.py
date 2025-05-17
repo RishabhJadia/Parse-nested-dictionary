@@ -83,7 +83,7 @@ async def call_llm_with_memory(state):
     chunk = state["chunk"]
     base_url = state["base_url"]
     messages = prompt_template.format_messages(chunk=chunk, base_url=base_url)
-    memory.chat_memory.add_user_message(chunk)
+    memory.chat_memory.add_user_message(f"Processing chunks with base URL: {chunk}\n{base_url}")
 
     logger.info(f"Processing chunk of size {len(chunk)}")
     result = await llm.ainvoke(messages)
