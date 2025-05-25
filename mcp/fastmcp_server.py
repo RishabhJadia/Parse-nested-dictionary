@@ -1,3 +1,4 @@
+# https: // github.com/daveebbelaar/ai-cookbook/blob/main/mcp/crash-course/3-simple-server-setup/README.md
 from fastapi import FastAPI
 from mcp.server.fastmcp import FastMCP
 import logging
