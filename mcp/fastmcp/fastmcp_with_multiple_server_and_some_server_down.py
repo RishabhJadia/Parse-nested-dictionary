@@ -1,7 +1,9 @@
 # https://apidog.com/blog/fastmcp/
 import logging
 
-
+# Issue fixed as part of PR
+# https://github.com/jlowin/fastmcp/issues/595
+# https://github.com/jlowin/fastmcp/pull/605
 from fastmcp import FastMCP
 
 

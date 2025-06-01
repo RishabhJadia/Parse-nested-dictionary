@@ -2,6 +2,10 @@ import asyncio
 from fastmcp.client import Client
 from fastmcp.client.transports import SSETransport
 
+# Issue fixed as part of PR
+# https://github.com/jlowin/fastmcp/issues/595
+# https://github.com/jlowin/fastmcp/pull/605
+
 # Configuration with multiple servers
 config = {
     "mcpServers": {
