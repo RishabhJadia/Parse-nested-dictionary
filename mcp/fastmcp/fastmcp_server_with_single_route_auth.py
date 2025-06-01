@@ -38,7 +38,10 @@ def check_auth(request: Request):
 
 # Define custom middleware class
 
+# For production, uncomment the line below
+# uvicorn fastmcp_server_with_auth:http_app --host 0.0.0.0 --port 8002
 
+# https://www.starlette.io/middleware/#using-middleware # for recommended appraoch
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # Exclude /health from authentication checks
