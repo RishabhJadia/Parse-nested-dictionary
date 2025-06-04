@@ -32,7 +32,7 @@ if __name__ == "__main__":
 #         tools_result = await client.list_tools()
 #         print(f"Available tools: {tools_result}")
 #         # Call our calculator tool
-#         result = await client.call_tool("add", {"a": 5, "b": 3})
+#         result = await client.call_tool("math_add", {"a": 5, "b": 3})
 #         print(f"Result: {result[0].text}")
 
 # if __name__ == "__main__":
