@@ -1,0 +1,276 @@
+leetcode:421
+    # Definition for singly-linked list.
+    # class ListNode:
+    #     def __init__(self, val=0, next=None):
+    #         self.val = val
+    #         self.next = next
+    class Solution:
+        def addTwoNumbers(self, l1: Optional[ListNode], l2: Optional[ListNode]) -> Optional[ListNode]:
+            dummyHead = ListNode(0)
+            currentHead = dummyHead
+            carry = 0
+
+            while l1 or l2:
+                if l1:
+                    l1_val = l1.val
+                else:
+                    l1_val = 0
+                if l2:
+                    l2_val = l2.val
+                else:
+                    l2_val = 0
+
+                sum_ = l1_val + l2_val + carry
+                new_node = ListNode(sum_ % 10) #get unit digit always
+                currentHead.next = new_node
+                currentHead = new_node or currentHead.next
+                carry = sum_ // 10 #remove unit digit always
+
+                if l1:
+                    l1 = l1.next
+                if l2:
+                    l2 = l2.next
+
+            if carry:
+                new_node = ListNode(carry)
+                currentHead.next = new_node
+
+            return dummyHead.next
+
+leetcode:7
+    def reverse(self, x):
+        reverse = 0
+        main_ = x
+        isnegative = False
+        if main_ < 0:
+            isnegative = True
+            main_ = -main_
+        while main_:
+            temp = main_%10
+            reverse = temp + reverse*10
+            main_ = main_//10
+        if reverse >= 2**31-1 or reverse <=-2**31:
+            return 0
+        if isnegative:
+            reverse = -reverse
+        return reverse
+
+
+Reversing the first K elements of a Queue
+i/p:[1,2,3,4,5]
+o/p: [3,2,1,4,5]
+    def ReverseFirstKItem(queue, k):
+        stack = [] #[1,2,3]
+        queue2 = queue[k:] #[4,5]
+        i = 0
+        while i < k:
+            pop_item = queue.pop(0)
+            stack.append(pop_item)
+            i = i+1
+        i = 0
+        queue = [] # [3,2,1]
+        while i < k:
+            pop_item = stack.pop(-1)
+            queue.append(pop_item)
+            i = i+1
+        queue = queue+queue2
+        return queue
+
+
+Reversing the first elements using single linked list
+    class Solution:
+        def reverseLLUsingStack(self, head):        
+            stack_ = []
+            CurrentHead = head
+            while CurrentHead:
+                stack_.append(CurrentHead)
+                CurrentHead = CurrentHead.next
+            head = CurrentHead = stack_.pop()
+            while len(stack_) > 0:
+                elem = stack_.pop()
+                CurrentHead.next = elem
+                CurrentHead = elem
+            CurrentHead.next = None
+            return head
+                OR
+        def reverseLLUsingStack(self, head):
+            prev_ = None
+            CurrentHead = head
+            while CurrentHead:
+                temp = CurrentHead.next
+                CurrentHead.next = prev
+                prev = CurrentHead
+                CurrentHead = temp
+            return prev_
+
+
+Get minimum difference pair
+    i/p: [1,1,2,3,5,6,2,3,4]
+    o/p: 1 1
+         2 2
+         3 3
+    def closestNumbers(A):
+        A.sort()
+        D=[A[i+1] - A[i] for i in range(len(A)-1)]
+        print(D)
+        target=min(D)
+        print(target)
+        X=[[A[i],A[i+1]] for i,d in enumerate(D) if d==target]
+        print(X)
+        for i in range(0,len(X)):
+            print(X[i][0], X[i][1])
+
+
+Sort List
+    i/p: [2,1,5,4,3]
+    o/p: [1,2,3,4,5]
+    aa = [4,1,3,2,6,1,2]
+    for i in range(0, len(aa)):
+        for j in range(i+1, len(aa)):
+            if aa[i] > aa[j]:
+                aa[i],aa[j] = aa[j], aa[i]
+
+
+Find Minimum pair value from list 
+    import math
+    def min_diff(aa):
+        aa.sort()
+        size = len(aa)-1
+        min_so_far = math.inf
+        for i in range(size):
+            if aa[i+1] - aa[i] < min_so_far:
+                min_so_far = aa[i+1] - aa[i]
+        return min_so_far
+
+
+def lengthOfLongestSubstring(s):
+    d = {}
+    i = 0
+    lon_seq = 0
+    for j in range(0, len(s)):
+        if s[j] in d:
+            i = max(i, d[s[j]]+1)
+        d[s[j]] = j
+        lon_seq = max(lon_seq,(j-i+1))
+    return lon_seq
+
+
+remove duplicate items from list O(n) because we use new temporary variable
+o/p=[1,2,3,4,5]
+aa=[1,1,2,2,2,3,4,5,5,5]
+temp=[]
+count=0
+size = len(aa)
+for i in range(0,size-1):
+    if aa[i]!=aa[i+1]:
+        temp.append(aa[i])
+    count += 1
+
+temp.append(aa[-1])
+
+        OR
+O(1)
+
+count = 0
+size = len(aa)
+for i in range(0, size-1):
+    if aa[i] != aa[i+1]:
+        aa[count] = aa[i]
+        count += 1
+
+aa[count] = aa[size - 1]
+
+
+remove complete duplicate items from list 
+aa=[1,1,2,2,2,3,4,5,5,5]
+temp_ = []
+count = 0
+for i in aa:
+    if aa.count(i) == 1:
+        temp_.append(i)
+    count += 1
+
+
+count number of times item occurs 
+aa=[1,1,2,2,2,3,4,5,5,5]
+dict_ = {}
+for rec in aa:
+    if aa.count(rec)>1:
+        dict_[rec]=aa.count(rec)
+    else:
+        dict_[rec]=1
+
+
+middle item from list using single linsed list
+
+def middlenode(self, head: ListNode):
+    CurrrentHead = head
+    counter = 0
+    while CurrentHead: #traverse the linked list
+        CurrentHead = CurrentHead.next
+        counter += 1
+
+    miditem = counter//2
+    CurrentHead = head
+    for item in range(miditem):
+        CurrentHead = CurrentHead.next
+    return CurrentHead
+
+
+
+
+lst = [ base**power for base in range(1, 5) for power in range(1,4)]
+print(lst)
+
+
+Convert uppercase to lower and substract no from 10 except special character
+
+list_ = "ABCD$#@123"
+new_list = []
+for rec in range(len(list_)):
+    if list_[rec].isdigit():
+        if int(list_[rec]) < 10:
+            new_list.append(str(10-int(list_[rec])))
+    elif list_[rec].isalpha():
+        new_list.append(list_[rec].lower())
+    else:
+        continue
+
+''.join(new_list)
+
+
+
+find longest word from the string.
+input: "i love dogs"
+outpt: love
+
+input: "fun&!! time"
+outpt: time
+
+from collections import OrderedDict
+ord_dict_ = OrderedDict()
+input = "i love dogs"
+input_split = input.split()
+for rec in input_split:
+    ord_dict_[rec] = len(rec)
+
+
+print(max(ord_dict_, key=lambda x: ord_dict_[x]))
+
+
+find common string in sorted way
+input_list = ["1,4,2,13", "1,4,10,13"]
+
+# 1. Convert each comma-separated string into a set of items
+# We use split(',') to separate the numbers within each string
+sets = [set(s.split(',')) for s in input_list]
+
+# 2. Find the intersection of all sets
+# The '*' operator unpacks the list of sets into the intersection method
+common_set = set.intersection(*sets)
+
+# 3. Sort the results
+# If elements are numeric but stored as strings, use key=int for natural sorting
+res = sorted(list(common_set), key=int)
+
+print(",".join(res))  # Output: 1,4,13
