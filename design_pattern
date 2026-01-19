@@ -1,0 +1,204 @@
+Design Pattern
+	Creational DP - It deals with objects creation and instantiation at runtime. without exposing the logic to the client. we don't need to change client code every time
+
+		Factory Method: there is not much diffenerence b/w factory and abstract factory. just need to created abstract class. from abc import ABCMeta, abstractstaticmethod
+			Problem:
+			    class EnglishLang:
+			        def __init__(self):
+			            pass
+			        def showlang():
+			            print('I am English Language')
+
+
+			    class HindiLang:
+			        def __init__(self):
+			            pass
+			        def showlang(cls):
+			            print('I am Hindi Language')
+
+
+			    #In client, now we create instance of an objects
+			    eng = EnglishLang()
+			    print(f'{eng}')
+			    eng.showlang()
+			    hin = HindiLang()
+			    print(f'{hin}')
+			    hin.showlang() # or HindiLang.showlang()
+
+			    Here, The Problem is every time when we add new language (i.e. class), we need to create object in the client side.
+
+			Solution:
+			    class EnglishLang:
+			        def __init__(self):
+			            pass
+			        def showlang(self):
+			            print('I am English Language')
+
+
+			    class HindiLang:
+			        def __init__(self):
+			            pass
+			        def showlang(self):
+			            print('I am Hindi Language')
+
+			    class FactoryClass:
+			        def FactoryMethod(self, obj=''):
+			            objs = {
+			                "English": EnglishLang(),
+			                "Hindi": HindiLang()
+			            }
+	            		return objs[obj]
+
+			    #In client, now we create instance of an objects
+			    fc = FactoryClass()
+			    fm = fc.FactoryMethod("English")
+			    print(f'{fm}')
+			    fm.showlang()
+
+			    Here, we don't need to write any logic in the client. we just need to define class and add in factorymethod.
+
+	Singleton Method:
+		Problem:
+			class EnglishLang:
+			    def __init__(self):
+			        pass
+
+			#In client, now we create instance of an objects
+			obj = EnglishLang()
+			print(obj)
+			obj1 = EnglishLang()
+			print(obj1)
+
+
+		    Here, Problem is we are creating two objects and both objects have different memory allocation.
+
+		Solution:
+			class Singletonclass(type):
+			    _instance = {}
+			    def __call__(cls, *args, **kwargs):
+			        if cls not in cls._instance:
+			            cls._instance[cls] = super(Singletonclass, cls).__call__(*args, **kwargs)
+			        return cls._instance[cls]
+
+
+			class EnglishLang(metaclass=Singletonclass):
+			    def __init__(self):
+			        pass
+			    def showlang(msg):
+			        print('I am English Language')
+
+			#In client, now we create instance of an objects
+			obj = EnglishLang()
+			print(obj)
+			obj1 = EnglishLang()
+			print(obj1)
+
+
+		    Here, So instead of creating multiple instance of an object restrict it to one only.
+
+    Structural DP- It deal with object/class composition. means it is responsible for class/object implementation
+
+		Facade DP:
+			Problem:
+			    class Sensor:
+			        def __init__(self):
+			            pass
+			        def SensorOn(self):
+			            print("Sensor On")
+			        def SensorOff(self):
+			            print("Sensor Off")
+
+			    class Smoke:
+			        def __init__(self):
+			            pass
+			        def SmokeOn(self):
+			            print("Smoke On")
+			        def SmokeOff(self):
+			            print("Smoke Off")
+
+			    class Lights:
+			        def __init__(self):
+			            pass
+			        def LightsOn(self):
+			            print("Lights On")
+			        def LightsOff(self):
+			            print("Lights Off")
+
+			    #In client, now we create instance of an objects
+			    InputFromUser = 30
+			    sensor = Sensor()
+			    smoke = Smoke()
+			    Light = Lights()
+			    if InputFromUser > 50:
+			        sensor.SensorOn()
+			        smoke.SmokeOn()
+			        Light.LightsOn()
+			    else:
+			        sensor.SensorOff()
+			        smoke.SmokeOff()
+			        Light.LightsOff()
+
+			    Here, the problem is when some changes/addtions are made in class then every time client also need to do the changes.
+			    i.e., to perform something automatic we cannot do this.
+
+			Solutions:
+			    class Sensor:
+			        def __init__(self):
+			            pass
+			        def SensorOn(self):
+			            print("Sensor On")
+			        def SensorOff(self):
+			            print("Sensor Off")
+
+			    class Smoke:
+			        def __init__(self):
+			            pass
+			        def SmokeOn(self):
+			            print("Smoke On")
+			        def SmokeOff(self):
+			            print("Smoke Off")
+
+			    class Lights:
+			        def __init__(self):
+			            pass
+			        def LightsOn(self):
+			            print("Lights On")
+			        def LightsOff(self):
+			            print("Lights Off")
+
+			    class FacadeClass:
+			        def __init__(self):
+			            self.sensor = Sensor()
+			            self.smoke = Smoke()
+			            self.lights = Lights()
+
+			        def Emergency(self):
+			            self.sensor.sensorOn()
+			            self.smoke.smokeOn()
+			            self.lights.LightOn()
+
+			        def NotEmergency(self):
+			            self.sensor.sensorOff()
+			            self.smoke.smokeOff()
+			            self.lights.LightOff()
+
+			    #In client, now we create instance of an objects
+			    InputFromUser = 30
+			    fc = FacadeClass()
+			    if InputFromUser > 50:
+			        fc.Emergency()
+			    else:
+			        fc.NotEmergency()
+
+				Here, We just create the instance of an object and call facadeclass where it will automate all the things.
+
+
+		Proxy DP: It is similar to middleware in django.
+		best example:
+		    Employee-->PA-->CEO
+		    where, PA is proxy person
+
+
+    Behavioural DP- It deals with communication b/w class/objects
+		Observer DP:
+		EX: Email unsubscribe
